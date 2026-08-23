@@ -10,6 +10,8 @@
     "lint": "eslint . --no-error-on-unmatched-pattern"
   },
   "dependencies": {
+    "@cp949/bb-core": "0.1.0",
+    "@cp949/bb-library": "0.1.0",
     "@mdn/browser-compat-data": "8.0.12",
     "acorn": "8.18.0",
     "browserslist": "4.28.8",
