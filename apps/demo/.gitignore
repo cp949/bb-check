@@ -1,0 +1,6 @@
+# 이 두 디렉터리는 `npm run build`(scripts/build-fixtures.ts, vite build)가
+# 매번 새로 만드는 산출물이다. dist는 루트 .gitignore의 bare `dist` 규칙이
+# 이미 잡지만, fixtures(그 안의 생성된 package.json 포함)는 루트 규칙이
+# 커버하지 않아 여기서 별도로 무시한다.
+dist
+fixtures

@@ -12,12 +12,13 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "test": "vitest run",
+    "test": "vitest run --exclude \"scripts/**\"",
     "typecheck": "tsc -p tsconfig.json --noEmit && turbo run typecheck",
     "lint": "eslint tests --no-error-on-unmatched-pattern && turbo run lint",
     "format:check": "prettier --check .",
     "check-package-files": "node scripts/check-package-files.mjs",
     "test-packed-package": "node scripts/test-packed-package.mjs",
+    "check-public-words": "node scripts/check-public-words.mjs",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run check-package-files && npm run test-packed-package"
   },
   "devDependencies": {

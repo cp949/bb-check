@@ -20,4 +20,9 @@ describe("workspace 공개 경계", () => {
       ["@cp949/bb-check", false],
     ]);
   });
+
+  it("demo app도 비공개다(npm tarball에 포함되지 않는다)", async () => {
+    const manifest = await readJson("apps/demo/package.json");
+    expect([manifest.name, manifest.private]).toEqual(["bb-check-demo", true]);
+  });
 });
