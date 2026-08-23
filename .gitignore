@@ -1,6 +1,9 @@
 # custom
 _tmp/
 
+# Turborepo
+.turbo
+
 # Logs
 logs
 *.log
@@ -144,3 +147,9 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# 위 "dist" 규칙(빌드 산출물 제외)은 test fixture가 실제 npm 배포 구조를
+# 흉내내려고 만드는 "test/fixtures/**/dist" 디렉터리까지 걸러버린다.
+# fixture는 소스이므로 커밋 대상에서 다시 포함한다.
+!**/test/fixtures/**/dist
+!**/test/fixtures/**/dist/**
