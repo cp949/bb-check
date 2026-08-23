@@ -101,4 +101,77 @@ describe("loadLibraryBaseline", () => {
       else process.env.NODE_ENV = original;
     }
   });
+
+  it("모바일 에이전트 이름을 BCD(@mdn/browser-compat-data) 명명 규칙으로 변환한다", async () => {
+    await writePackageJson({
+      name: "mobile-agents",
+      version: "1.0.0",
+      browserslist: ["and_chr >= 4", "ios_saf >= 12", "samsung >= 4"],
+    });
+
+    const baseline = await loadLibraryBaseline(tempDir);
+
+    // BCD 이름으로 변환되어 있어야 한다(compat-bcd.ts의 buildCompatIndex가
+    // BrowserBaseline 키를 BCD browsers 키로 그대로 조회하기 때문).
+    expect(baseline.safari_ios).toBe("12.0");
+    expect(baseline.samsunginternet_android).toBe("4");
+    expect(typeof baseline.chrome_android).toBe("string");
+    expect(baseline.chrome_android).toMatch(/^\d+/);
+
+    // browserslist의 원래 이름은 결과에 남아있지 않아야 한다.
+    expect(Object.hasOwn(baseline, "and_chr")).toBe(false);
+    expect(Object.hasOwn(baseline, "ios_saf")).toBe(false);
+    expect(Object.hasOwn(baseline, "samsung")).toBe(false);
+  });
+
+  it("browserslist의 android(Android Browser)를 BCD의 webview_android로 변환한다", async () => {
+    // browserslist 자신의 bbmTransform 매핑(node_modules/browserslist/index.js)이
+    // BCD 기반 supports 질의에서 `webview_android: 'android'`로 명시한다 —
+    // 이 저장소에 설치된 실물 browserslist 소스에서 직접 확인한 매핑이다.
+    await writePackageJson({
+      name: "android-webview",
+      version: "1.0.0",
+      browserslist: ["android >= 4"],
+    });
+
+    const baseline = await loadLibraryBaseline(tempDir);
+
+    expect(baseline.webview_android).toBe("4");
+    expect(Object.hasOwn(baseline, "android")).toBe(false);
+  });
+
+  it("op_mob을 BCD의 opera_android로 변환한다", async () => {
+    await writePackageJson({
+      name: "op-mob",
+      version: "1.0.0",
+      browserslist: ["op_mob >= 10"],
+    });
+
+    const baseline = await loadLibraryBaseline(tempDir);
+
+    expect(baseline.opera_android).toBe("10");
+    expect(Object.hasOwn(baseline, "op_mob")).toBe(false);
+  });
+
+  it("BCD에 대응 데이터가 없는 에이전트(예: bb)는 원래 이름 그대로 남는다", async () => {
+    // and_qq/and_uc/baidu/bb/ie_mob/kaios/op_mini는 @mdn/browser-compat-data의
+    // browsers에 대응 키가 없다. 변환하지 않고 원래 이름을 통과시켜도
+    // compat-bcd.ts의 buildCompatIndex가 BCD 조회 실패로 어차피 건너뛰므로
+    // 기존 동작과 동일하다(무해한 스킵).
+    await writePackageJson({
+      name: "blackberry",
+      version: "1.0.0",
+      browserslist: ["bb >= 1"],
+    });
+
+    const baseline = await loadLibraryBaseline(tempDir);
+
+    expect(baseline.bb).toBe("7");
+  });
+
+  it("데스크톱 에이전트 이름은 BCD와 이미 일치하므로 그대로 통과한다", async () => {
+    expect(await loadLibraryBaseline(fixture("multi-entry"))).toMatchObject({
+      chrome: "80",
+    });
+  });
 });

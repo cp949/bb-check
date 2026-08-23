@@ -150,10 +150,74 @@ const isOlder = (a: ParsedVersion, b: ParsedVersion): boolean =>
   a.major !== b.major ? a.major < b.major : a.minor < b.minor;
 
 /**
+ * browserslist(caniuse-lite) 에이전트 이름 → @mdn/browser-compat-data
+ * `browsers` 키 변환표.
+ *
+ * compat-bcd.ts의 buildCompatIndex는 BrowserBaseline의 키를 BCD의
+ * browsers 키로 그대로 조회한다(`Object.hasOwn(support, browser)`).
+ * 데스크톱 에이전트(chrome/edge/firefox/ie/opera/safari)는 이미 두 쪽
+ * 이름이 같지만, 모바일 에이전트 중 다수는 이름 규칙이 갈린다 — 이 표를
+ * 거치지 않으면 그 브라우저의 모든 API 체크가 BCD 조회 실패로 조용히
+ * 건너뛰어진다(오탐이 아니라 미탐: 실제로 검사해야 할 브라우저가 검사
+ * 대상에서 조용히 빠진다).
+ *
+ * 이 저장소에 설치된 실물 browserslist/caniuse-lite와
+ * @mdn/browser-compat-data를 직접 조회해 확인한 전체 목록:
+ *   - caniuse-lite 전체 agents(19개): and_chr, and_ff, and_qq, and_uc,
+ *     android, baidu, bb, chrome, edge, firefox, ie, ie_mob, ios_saf,
+ *     kaios, op_mini, op_mob, opera, safari, samsung
+ *   - @mdn/browser-compat-data의 browsers 키(17개): bun, chrome,
+ *     chrome_android, deno, edge, firefox, firefox_android, ie, nodejs,
+ *     oculus, opera, opera_android, safari, safari_ios,
+ *     samsunginternet_android, webview_android, webview_ios
+ *
+ * 대조 결과:
+ *   - chrome/edge/firefox/ie/opera/safari: 이미 이름이 같다 — 이 표에
+ *     넣지 않고 원래 이름 그대로 통과시킨다.
+ *   - and_chr→chrome_android, and_ff→firefox_android, ios_saf→safari_ios,
+ *     samsung→samsunginternet_android, op_mob→opera_android: 같은
+ *     브라우저를 가리키지만 이름만 다르다 — 아래 표에서 변환한다.
+ *   - android→webview_android: browserslist 자신의
+ *     node_modules/browserslist/index.js:bbmTransform()이 BCD 기반
+ *     `supports` 질의에 쓰는 1차 매핑 표에 `webview_android: 'android'`로
+ *     명시한다(추측이 아니라 browserslist 소스 코드에서 직접 확인).
+ *     caniuse-lite 데이터도 이를 뒷받침한다 — index.js는
+ *     ANDROID_EVERGREEN_FIRST('37') 이후의 "android" 버전을 chrome
+ *     버전에서 파생시켜 채운다(최신 Android WebView와 Chrome for Android가
+ *     같은 Chromium 빌드를 공유하기 때문에 일관성이 있다). 아래 표에서
+ *     변환한다.
+ *   - and_qq, and_uc, baidu, bb, ie_mob, kaios, op_mini: BCD의
+ *     browsers에 대응 키가 전혀 없다 — 이 표에 넣지 않는다. 변환하지
+ *     않고 원래 이름을 그대로 통과시켜도 buildCompatIndex가 어차피 BCD
+ *     조회 실패로 건너뛰므로 기존 동작(무해한 스킵)과 동일하다.
+ */
+const BCD_BROWSER_NAME_ALIASES: Readonly<Record<string, string>> = {
+  and_chr: "chrome_android",
+  and_ff: "firefox_android",
+  ios_saf: "safari_ios",
+  samsung: "samsunginternet_android",
+  op_mob: "opera_android",
+  android: "webview_android",
+};
+
+/**
+ * browserslist 에이전트 이름을 알려진 경우에만 BCD 이름으로 바꾼다.
+ * 대응 관계를 모르는 이름(데스크톱 에이전트, 또는 BCD에 대응 데이터가
+ * 없는 에이전트)은 원래 이름 그대로 돌려준다.
+ */
+const toBcdBrowserName = (browserslistName: string): string =>
+  BCD_BROWSER_NAME_ALIASES[browserslistName] ?? browserslistName;
+
+/**
  * browserslist(...)가 돌려준 "이름 버전" 목록에서 브라우저별 최소
  * major/minor 버전을 뽑는다. 버전을 숫자로 해석할 수 없는 항목(예: Safari
  * Technology Preview의 "TP")은 최소값 비교 대상이 될 수 없으므로
  * 건너뛴다.
+ *
+ * 에이전트 이름은 minByBrowser에 쌓기 전에 toBcdBrowserName으로 BCD
+ * 명명 규칙으로 변환한다 — 그래야 이론상 서로 다른 browserslist 이름이
+ * 같은 BCD 키로 모이는 경우(현재 매핑표에서는 실제로 발생하지 않지만)에도
+ * 아래 isOlder 비교가 자동으로 더 보수적인(오래된) 버전을 채택한다.
  */
 const deriveMinimumVersions = (
   matched: readonly string[],
@@ -162,7 +226,7 @@ const deriveMinimumVersions = (
   for (const entry of matched) {
     const lastSpace = entry.lastIndexOf(" ");
     if (lastSpace === -1) continue;
-    const name = entry.slice(0, lastSpace);
+    const name = toBcdBrowserName(entry.slice(0, lastSpace));
     const parsed = parseVersion(entry.slice(lastSpace + 1));
     if (!parsed) continue;
 
