@@ -1,0 +1,12 @@
+{
+  "name": "@fixture/violations",
+  "version": "1.0.0",
+  "private": true,
+  "browserslist": [
+    "chrome >= 50"
+  ],
+  "exports": "./dist/index.js",
+  "dependencies": {
+    "leaky-dep": "^1.0.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "@fixture/allowance",
+  "version": "1.0.0",
+  "private": true,
+  "browserslist": [
+    "chrome >= 80"
+  ],
+  "exports": "./dist/index.js"
+}

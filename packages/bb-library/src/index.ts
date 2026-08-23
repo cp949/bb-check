@@ -25,3 +25,5 @@ export type {
   DependencyFinding,
   DependencyFindingKind,
 } from "./dependency-closure.js";
+export { checkLibrary } from "./check-library.js";
+export type { CheckLibraryOptions } from "./check-library.js";
