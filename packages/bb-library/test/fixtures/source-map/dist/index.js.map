@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../src/input.ts"],
+  "sourcesContent": ["export function greet(name: string): string {\n  return `Hello, ${name}!`;\n}\n"],
+  "mappings": "AAAO,SAAS,MAAM,MAAsB;AAC1C,SAAO,UAAU,IAAI;AACvB;",
+  "names": []
+}
