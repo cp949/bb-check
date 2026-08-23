@@ -3,19 +3,42 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./library": "./dist/library.js"
+  },
+  "bin": {
+    "bb-check": "./dist/cli.js"
+  },
+  "files": [
+    "dist/**",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "node ../../scripts/run-if-src.mjs tsc -p tsconfig.json",
+    "build": "vite build && rollup -c rollup.dts.config.mjs",
+    "prepack": "node ../../scripts/copy-root-docs.mjs",
     "typecheck": "node ../../scripts/run-if-src.mjs tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint . --no-error-on-unmatched-pattern"
   },
   "dependencies": {
-    "@cp949/bb-core": "0.1.0",
-    "@cp949/bb-library": "0.1.0",
     "@mdn/browser-compat-data": "8.0.12",
     "acorn": "8.18.0",
     "browserslist": "4.28.8",
     "browserslist-to-esbuild": "2.1.1",
     "esbuild": "0.28.2"
+  },
+  "devDependencies": {
+    "@cp949/bb-core": "0.1.0",
+    "@cp949/bb-library": "0.1.0"
   }
 }
