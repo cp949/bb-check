@@ -4,8 +4,9 @@ coverage
 .turbo
 package-lock.json
 
-# 이 task의 골격 범위 밖의 사전 존재 계획/프로세스 문서·파일 (brief의
-# Modify 대상은 .gitignore뿐이라 다른 기존 파일은 건드리지 않는다)
+# 사전 존재 계획/프로세스 문서(공개 배포 대상이 아니다) — README.md는
+# 여기 포함하지 않는다. README.md는 실제로 공개 배포되는 문서라(prepack이
+# 그대로 tarball에 복사한다) 나머지 코드와 동일하게 prettier 포맷을
+# 유지해야 한다.
 docs/
 .superpowers/
-README.md

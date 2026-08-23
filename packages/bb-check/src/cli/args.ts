@@ -14,8 +14,11 @@ export interface ParsedLibraryCheckArgs {
   readonly debug: boolean;
 }
 
-const USAGE =
-  "사용법: bb-check library check [--config <path>] [--dir <path>] [--debug]";
+/** main.ts가 --help 처리와 사용법 오류 메시지 양쪽에서 공유하는 사용법 문자열. */
+export const USAGE =
+  "사용법: bb-check library check [--config <path>] [--dir <path>] [--debug]\n" +
+  "       bb-check --help | -h\n" +
+  "       bb-check --version | -v";
 
 const usageError = (reason: string): never => {
   throw new BbError("BB_USAGE", `[BB_USAGE] ${reason}\n${USAGE}`);

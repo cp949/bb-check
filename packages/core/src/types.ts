@@ -4,7 +4,7 @@
 /** finding이 속하는 검사 축. 정렬 시 이 순서(syntax, runtime-js, dependency, css)를 따른다. */
 export type FindingAxis = "syntax" | "runtime-js" | "dependency" | "css";
 
-/** 기능 식별자 -> baseline 상태 문자열 맵 (예: "widely-available", "newly-available"). */
+/** 브라우저 이름 -> 최소 지원 버전 문자열 맵 (예: `{ chrome: "80" }`). */
 export type BrowserBaseline = Readonly<Record<string, string>>;
 
 /** 특정 파일의 특정 라이브러리 사용을 baseline 검사에서 예외로 허용하는 항목. */

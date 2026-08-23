@@ -124,6 +124,18 @@ interface OriginResolution {
   readonly parseFailureFinding: Finding | undefined;
 }
 
+type SourceMapPathApi = Pick<typeof posix, "dirname" | "relative">;
+
+/**
+ * external source map의 실제 위치를 projectDir 기준 보고 경로로 바꾼다.
+ * Windows cross-drive relative 결과는 drive 절대 경로이므로 그대로 보존한다.
+ */
+export const externalSourceMapDir = (
+  projectDir: string,
+  mapPath: string,
+  pathApi: SourceMapPathApi = { dirname, relative },
+): string => pathApi.dirname(pathApi.relative(projectDir, mapPath));
+
 /**
  * dist 파일의 sourceMappingURL 주석을 찾아 원본 위치 조회 함수를 만든다.
  * inline data URL은 여기서 직접 base64/percent-decoding하고, 상대 경로는
@@ -132,6 +144,7 @@ interface OriginResolution {
  * 외부 map 파일이 없는 것은 오류가 아니라 조용히 건너뛴다.
  */
 async function resolveOriginLookup(
+  projectDir: string,
   entryPath: string,
   relFile: string,
   source: string,
@@ -141,6 +154,7 @@ async function resolveOriginLookup(
     return { originOf: undefined, parseFailureFinding: undefined };
 
   let mapText: string;
+  let mapDir = posix.dirname(relFile);
   if (url.startsWith("data:")) {
     const decoded = decodeDataUrl(url);
     if (decoded === undefined)
@@ -154,9 +168,9 @@ async function resolveOriginLookup(
       // 외부 map 파일이 없거나 읽을 수 없음: 조용히 건너뛴다(에러 아님).
       return { originOf: undefined, parseFailureFinding: undefined };
     }
+    mapDir = externalSourceMapDir(projectDir, mapPath);
   }
 
-  const mapDir = posix.dirname(relFile);
   const lookup = createOriginLookup(mapText, { mapDir });
   if (lookup.kind === "parse-failure") {
     return {
@@ -185,6 +199,9 @@ async function resolveOriginLookup(
  * 개별 파일의 읽기·파싱 실패는 그 파일의 나머지 검사와 다른 파일 전체를
  * 막지 않는다 — `BB_TARGET_PARSE`(또는 읽기 실패의 경우 `BB_TARGET_READ`)
  * finding으로 남기고 `incomplete: true`로 표시한 뒤 계속한다. baseline이
+ * BCD가 지원하지 않는 browser key를 포함하거나 유효 entry와 섞인 JS
+ * export target을 판정할 수 없는 경우도 finding/incomplete로 보고하며,
+ * 지원 browser·유효 entry·다른 판정 축 검사는 계속한다. baseline이
  * esbuild가 표현할 수 있는 문법 target으로 전혀 변환되지 않는 브라우저
  * 조합이면(예: 모바일 전용 브라우저만으로 구성된 baseline) 문법 축 전체를
  * 건너뛰고 `BB_SYNTAX_TARGET_UNAVAILABLE` finding과 `incomplete: true`로
@@ -194,7 +211,7 @@ async function resolveOriginLookup(
  * @param options.allow 이 검사에서 면제할 런타임 API 사용 목록. 호출 중 이
  *   배열이나 그 원소를 변경해도 이미 시작된 검사 결과에는 영향을 주지 않는다.
  * @throws {BbError} BB_INPUT_NOT_FOUND / BB_CONFIG_INVALID / BB_BASELINE_EMPTY —
- *   baseline 파생, dist 진입점 수집, dependency manifest 적재 중 하나라도
+ *   baseline 파생, 유효한 dist 진입점 수집, dependency manifest 적재 중 하나라도
  *   실패하면(대상 프로젝트 자체가 검사 불가능하다는 뜻이므로 개별 파일
  *   오류와 달리 전체 호출이 실패한다).
  */
@@ -210,13 +227,48 @@ export async function checkLibrary(
   }));
 
   const baseline = await loadLibraryBaseline(projectDir);
-  const entries = await resolveDistEntries(projectDir);
+  const { entries, invalidTargets } = await resolveDistEntries(projectDir);
   const dependencyScanner = await createDependencyClosureScanner(projectDir);
   const compatScanner = createCompatScanner({ baseline, allowed: allow });
   const syntaxTarget = toSyntaxTarget(baseline);
 
   const findings: Finding[] = [];
   let incomplete = false;
+
+  for (const { target, reason } of invalidTargets) {
+    const reasonDetail =
+      reason === "absolute"
+        ? "절대 경로입니다"
+        : reason === "outside-root"
+          ? "package root 밖으로 탈출합니다"
+          : "파일이 존재하지 않거나 일반 파일이 아닙니다";
+    findings.push(
+      buildFinding(
+        "syntax",
+        target,
+        null,
+        "BB_TARGET_READ",
+        `package.json#exports의 JavaScript target ${target}을(를) 검사할 수 없습니다: ${reasonDetail}.`,
+      ),
+    );
+    incomplete = true;
+  }
+
+  for (const {
+    browser,
+    baselineVersion,
+  } of compatScanner.unsupportedBrowsers) {
+    findings.push(
+      buildFinding(
+        "runtime-js",
+        "*",
+        null,
+        "BB_RUNTIME_BASELINE_UNSUPPORTED",
+        `BCD가 baseline browser ${browser} ${baselineVersion}을(를) 지원하지 않아 runtime API 검사를 수행할 수 없습니다. 다른 browser와 판정 축은 계속 검사했습니다.`,
+      ),
+    );
+    incomplete = true;
+  }
 
   // esbuild가 표현할 수 있는 target이 하나도 없는 baseline이 있다(예:
   // ChromeAndroid/FirefoxAndroid/OperaMobile/Samsung처럼 esbuild의
@@ -272,6 +324,7 @@ export async function checkLibrary(
     }
 
     const { originOf, parseFailureFinding } = await resolveOriginLookup(
+      projectDir,
       entryPath,
       relFile,
       source,

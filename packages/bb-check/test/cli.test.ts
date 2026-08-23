@@ -184,6 +184,84 @@ describe("main: exit code matrix", () => {
     expect(stderrText()).toBe("");
   });
 
+  it("모든 JS export target이 판정 불가여도 finding을 stdout에 쓰고 exit 1을 반환한다", async () => {
+    const dir = join(root, "all-invalid-exports");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({
+        name: "cli-all-invalid-exports-fixture",
+        version: "1.0.0",
+        private: true,
+        browserslist: ["chrome >= 80"],
+        exports: {
+          "./escape": "../../outside.js",
+          "./absolute": "/tmp/bb-check-absolute.js",
+          "./missing": "./dist/missing.js",
+        },
+      }),
+      "utf8",
+    );
+    await writeFile(
+      join(dir, "bb-check.config.mjs"),
+      'export default { library: { projectDir: ".", allow: [] } };\n',
+      "utf8",
+    );
+
+    const { io, stdoutText, stderrText } = createRecordingIo(dir);
+    const exitCode = await main(["library", "check"], io);
+
+    expect(exitCode).toBe(1);
+    expect(stdoutText()).toContain("불완전");
+    expect(stdoutText()).toContain("../../outside.js");
+    expect(stdoutText()).toContain("./dist/missing.js");
+    expect(stdoutText()).toContain("/tmp/bb-check-absolute.js");
+    expect(stderrText()).toBe("");
+  });
+
+  it("--help/-h는 stdout에 사용법을 쓰고 exit 0을 반환한다(usage ERROR가 아닌 usage REQUEST)", async () => {
+    const { io, stdoutText, stderrText } = createRecordingIo(root);
+    const exitCode = await main(["--help"], io);
+
+    expect(exitCode).toBe(0);
+    expect(stdoutText()).toContain("사용법:");
+    expect(stderrText()).toBe("");
+
+    const { io: io2, stdoutText: stdoutText2 } = createRecordingIo(root);
+    expect(await main(["-h"], io2)).toBe(0);
+    expect(stdoutText2()).toContain("사용법:");
+  });
+
+  it("library check --help처럼 위치와 무관하게 --help를 인식한다", async () => {
+    const { io, stdoutText } = createRecordingIo(root);
+    const exitCode = await main(["library", "check", "--help"], io);
+
+    expect(exitCode).toBe(0);
+    expect(stdoutText()).toContain("사용법:");
+  });
+
+  it("--version/-v는 stdout에 전달된 버전을 쓰고 exit 0을 반환한다", async () => {
+    const { io, stdoutText, stderrText } = createRecordingIo(root);
+    const exitCode = await main(["--version"], io, { version: "9.9.9" });
+
+    expect(exitCode).toBe(0);
+    expect(stdoutText()).toBe("9.9.9\n");
+    expect(stderrText()).toBe("");
+
+    const { io: io2, stdoutText: stdoutText2 } = createRecordingIo(root);
+    expect(await main(["-v"], io2, { version: "9.9.9" })).toBe(0);
+    expect(stdoutText2()).toBe("9.9.9\n");
+  });
+
+  it("알 수 없는 옵션은 여전히 [BB_USAGE]로 거절하고 exit 2를 반환한다(help/version과 혼동하지 않는다)", async () => {
+    const { io, stdoutText, stderrText } = createRecordingIo(root);
+    const exitCode = await main(["--wat"], io);
+
+    expect(exitCode).toBe(2);
+    expect(stderrText()).toContain("[BB_USAGE]");
+    expect(stdoutText()).toBe("");
+  });
+
   it("사용법 오류는 stderr에 [BB_USAGE]를 쓰고 exit 2를 반환한다", async () => {
     const { io, stdoutText, stderrText } = createRecordingIo(root);
     const exitCode = await main(["check"], io);

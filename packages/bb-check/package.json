@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "engines": {
-    "node": ">=22.12"
+    "node": ">=20"
   },
   "exports": {
     ".": "./dist/index.js",
@@ -26,7 +26,7 @@
   "scripts": {
     "build": "vite build && rollup -c rollup.dts.config.mjs",
     "prepack": "node ../../scripts/copy-root-docs.mjs",
-    "typecheck": "node ../../scripts/run-if-src.mjs tsc -p tsconfig.json --noEmit",
+    "typecheck": "node ../../scripts/run-if-src.mjs tsc -p tsconfig.typecheck.json",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint . --no-error-on-unmatched-pattern"
   },

@@ -187,9 +187,9 @@ const isOlder = (a: ParsedVersion, b: ParsedVersion): boolean =>
  *     같은 Chromium 빌드를 공유하기 때문에 일관성이 있다). 아래 표에서
  *     변환한다.
  *   - and_qq, and_uc, baidu, bb, ie_mob, kaios, op_mini: BCD의
- *     browsers에 대응 키가 전혀 없다 — 이 표에 넣지 않는다. 변환하지
- *     않고 원래 이름을 그대로 통과시켜도 buildCompatIndex가 어차피 BCD
- *     조회 실패로 건너뛰므로 기존 동작(무해한 스킵)과 동일하다.
+ *     browsers에 대응 키가 전혀 없다 — 이 표에 넣지 않는다. 원래 이름을
+ *     baseline에 남겨 buildCompatIndex/checkLibrary가 runtime-js 판정 불가
+ *     finding과 incomplete로 보고하게 한다.
  */
 const BCD_BROWSER_NAME_ALIASES: Readonly<Record<string, string>> = {
   and_chr: "chrome_android",

@@ -129,11 +129,15 @@ describe("buildCompatIndex", () => {
     expect(high.globals.has("structuredClone")).toBe(false);
   });
 
-  it("BCD가 추적하지 않는 baseline 브라우저 이름은 조용히 건너뛴다(판정 근거 없음)", () => {
-    expect(() =>
-      buildCompatIndex({ "does-not-exist-in-bcd": "1" }),
-    ).not.toThrow();
-    const index = buildCompatIndex({ "does-not-exist-in-bcd": "1" });
-    expect(index.globals.size).toBe(0);
+  it("BCD가 지원하지 않는 baseline browser key를 판정 불가 목록에 보존한다", () => {
+    const index = buildCompatIndex({
+      chrome: "80",
+      "does-not-exist-in-bcd": "1",
+    });
+
+    expect(index.unsupportedBrowsers).toEqual([
+      { browser: "does-not-exist-in-bcd", baselineVersion: "1" },
+    ]);
+    expect(index.globals.has("structuredClone")).toBe(true);
   });
 });

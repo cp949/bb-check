@@ -52,7 +52,7 @@ const chmodCliBinPlugin = (): Plugin => ({
 export default defineConfig({
   plugins: [chmodCliBinPlugin()],
   build: {
-    target: "node22",
+    target: "node20",
     lib: {
       entry: {
         index: resolve(packageDir, "src/index.ts"),

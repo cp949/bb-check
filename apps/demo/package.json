@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build && node scripts/build-fixtures.ts",
+    "build": "vite build && node --experimental-strip-types scripts/build-fixtures.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --no-error-on-unmatched-pattern"
   },

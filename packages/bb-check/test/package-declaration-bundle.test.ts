@@ -14,21 +14,20 @@
 // internal error로 죽었다 — task-10-report.md "Fix 1" 절 참고). 그 교훈을
 // 그대로 반영해, 이 테스트는 dist/*.d.ts 파일들을 워크스페이스와 완전히
 // 분리된 임시 디렉터리로 복사하고(node_modules도, @cp949/bb-core나
-// @cp949/bb-library도 전혀 없는 환경) TypeScript Compiler API로 실제
+// @cp949/bb-library도 전혀 없는 환경) native TypeScript 7 compiler CLI로 실제
 // 타입체크를 돌려 **문법·타입 모두 유효한지** 확인한다 — "포함되어 있지
 // 않다"만 보고 "유효한 TypeScript다"를 가정하지 않는다.
 //
-// subprocess로 `npx tsc`를 spawn하는 대신 Compiler API를 직접 쓴다 — 임시
-// 디렉터리는 repo 밖(os tmpdir)이라 `npx`가 local tsc를 못 찾고 레지스트리
-// fallback을 시도할 위험이 있다. Compiler API는 이 파일이 이미 resolve한
-// `typescript`(devDependency, root에 hoisted)를 그대로 재사용해 그 문제가
-// 없다.
+// TypeScript 7은 legacy Compiler API를 package root export에서 제거했다. 대신
+// root node_modules의 native tsc 실행 파일을 process.execPath로 직접 실행한다 — 임시
+// 디렉터리는 repo 밖(os tmpdir)이라 `npx tsc`가 레지스트리 fallback을 시도할
+// 위험이 있지만, 이 경로는 workspace에 고정된 devDependency를 사용한다.
 
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import ts from "typescript";
 
 const DIST_DIR = "packages/bb-check/dist";
 const ENTRY_NAMES = ["index", "library", "cli"] as const;
@@ -87,29 +86,35 @@ describe("공개 .d.ts는 private workspace package를 참조하지 않는다", 
         "utf8",
       );
 
-      const program = ts.createProgram({
-        rootNames: [checkFile],
-        options: {
-          target: ts.ScriptTarget.ES2022,
-          module: ts.ModuleKind.NodeNext,
-          moduleResolution: ts.ModuleResolutionKind.NodeNext,
-          strict: true,
-          noUncheckedIndexedAccess: true,
-          exactOptionalPropertyTypes: true,
-          skipLibCheck: false,
-          noEmit: true,
-          types: [],
-        },
-      });
-      const diagnostics = ts.getPreEmitDiagnostics(program);
+      const configFile = join(tmpRoot, "tsconfig.json");
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          compilerOptions: {
+            target: "ES2022",
+            module: "NodeNext",
+            moduleResolution: "NodeNext",
+            strict: true,
+            noUncheckedIndexedAccess: true,
+            exactOptionalPropertyTypes: true,
+            skipLibCheck: false,
+            noEmit: true,
+            types: [],
+          },
+          files: ["check.ts"],
+        }),
+        "utf8",
+      );
+      const result = spawnSync(
+        process.execPath,
+        [resolve("node_modules/@typescript/native/bin/tsc"), "-p", configFile],
+        { cwd: tmpRoot, encoding: "utf8" },
+      );
 
-      if (diagnostics.length > 0) {
-        const formatted = ts.formatDiagnostics(diagnostics, {
-          getCurrentDirectory: () => tmpRoot,
-          getCanonicalFileName: (fileName) => fileName,
-          getNewLine: () => "\n",
-        });
-        throw new Error(`격리된 typecheck가 실패했다:\n${formatted}`);
+      if (result.status !== 0) {
+        throw new Error(
+          `격리된 typecheck가 실패했다:\n${result.stdout}${result.stderr}`,
+        );
       }
     } finally {
       await rm(tmpRoot, { recursive: true, force: true });

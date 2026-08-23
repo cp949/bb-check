@@ -27,16 +27,20 @@ const writePackageJson = async (value: unknown) => {
 
 describe("resolveDistEntries", () => {
   it("string, array, condition object, subpath object 형태를 모두 순회해 정렬·중복 제거한 JS 진입점을 반환한다", async () => {
-    expect(await resolveDistEntries(fixture("multi-entry"))).toEqual([
-      expect.stringMatching(/dist\/feature\.cjs$/),
-      expect.stringMatching(/dist\/index\.js$/),
-    ]);
+    expect(await resolveDistEntries(fixture("multi-entry"))).toEqual({
+      entries: [
+        expect.stringMatching(/dist\/feature\.cjs$/),
+        expect.stringMatching(/dist\/index\.js$/),
+      ],
+      invalidTargets: [],
+    });
   });
 
   it("최상위 exports가 string 하나뿐이어도 처리한다", async () => {
-    expect(await resolveDistEntries(fixture("clean"))).toEqual([
-      expect.stringMatching(/dist\/index\.js$/),
-    ]);
+    expect(await resolveDistEntries(fixture("clean"))).toEqual({
+      entries: [expect.stringMatching(/dist\/index\.js$/)],
+      invalidTargets: [],
+    });
   });
 
   it("exports에 JavaScript가 없으면 BB_INPUT_NOT_FOUND다", async () => {
@@ -58,7 +62,7 @@ describe("resolveDistEntries", () => {
     });
   });
 
-  it("package root 밖을 가리키는 경로는 조용히 제외하고 나머지는 반환한다", async () => {
+  it("유효 entry와 섞인 root escape·절대·missing JS target을 판정 불가 목록에 보존한다", async () => {
     await mkdir(join(tempDir, "dist"), { recursive: true });
     await writeFile(join(tempDir, "dist", "index.js"), "export {};", "utf8");
     await writePackageJson({
@@ -68,11 +72,19 @@ describe("resolveDistEntries", () => {
         ".": "./dist/index.js",
         "./evil-relative": "../../etc/passwd.js",
         "./evil-absolute": "/etc/passwd.js",
+        "./missing": "./dist/missing.js",
       },
     });
 
-    const entries = await resolveDistEntries(tempDir);
-    expect(entries).toEqual([expect.stringMatching(/dist\/index\.js$/)]);
+    const resolution = await resolveDistEntries(tempDir);
+    expect(resolution).toEqual({
+      entries: [expect.stringMatching(/dist\/index\.js$/)],
+      invalidTargets: [
+        { target: "../../etc/passwd.js", reason: "outside-root" },
+        { target: "./dist/missing.js", reason: "missing" },
+        { target: "/etc/passwd.js", reason: "absolute" },
+      ],
+    });
   });
 
   it("types, CSS, JSON, source map은 진입점에서 제외한다", async () => {
@@ -96,19 +108,31 @@ describe("resolveDistEntries", () => {
       },
     });
 
-    const entries = await resolveDistEntries(tempDir);
-    expect(entries).toEqual([expect.stringMatching(/dist\/index\.js$/)]);
+    const resolution = await resolveDistEntries(tempDir);
+    expect(resolution).toEqual({
+      entries: [expect.stringMatching(/dist\/index\.js$/)],
+      invalidTargets: [],
+    });
   });
 
-  it("exports에 나열되어 있어도 실제 파일이 없으면 제외한다", async () => {
+  it("JS target이 전부 root escape·절대·missing이어도 invalidTargets를 반환한다", async () => {
     await writePackageJson({
-      name: "missing-on-disk",
+      name: "all-invalid-targets",
       version: "1.0.0",
-      exports: { ".": "./dist/does-not-exist.js" },
+      exports: {
+        "./escape": "../../outside.js",
+        "./absolute": "/tmp/bb-check-absolute.js",
+        "./missing": "./dist/does-not-exist.js",
+      },
     });
 
-    await expect(resolveDistEntries(tempDir)).rejects.toMatchObject({
-      code: "BB_INPUT_NOT_FOUND",
+    await expect(resolveDistEntries(tempDir)).resolves.toEqual({
+      entries: [],
+      invalidTargets: [
+        { target: "../../outside.js", reason: "outside-root" },
+        { target: "./dist/does-not-exist.js", reason: "missing" },
+        { target: "/tmp/bb-check-absolute.js", reason: "absolute" },
+      ],
     });
   });
 });

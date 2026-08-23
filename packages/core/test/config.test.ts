@@ -16,7 +16,7 @@ describe("normalizeConfig", () => {
     >;
     library.allow = [];
     expect(() => normalizeConfig({ library }, "/repo")).toThrowError(
-      /projectDir/,
+      /\[BB_CONFIG_INVALID\].*library/,
     );
 
     const input = { library: { projectDir: ".", allow: [] } };
@@ -38,6 +38,39 @@ describe("normalizeConfig", () => {
     );
   });
 
+  // 잡는 생산 결함: root의 prototype을 검사하지 않으면 class instance와
+  // 사용자 정의 prototype object의 library getter를 실행해 신뢰 경계를 넘는다.
+  it("root는 class instance나 사용자 정의 prototype object를 getter 실행 없이 거절한다", () => {
+    let classGetterInvoked = false;
+    class ConfigClass {
+      library = { projectDir: ".", allow: [] };
+
+      get trap() {
+        classGetterInvoked = true;
+        return "must not run";
+      }
+    }
+
+    let customPrototypeGetterInvoked = false;
+    const customPrototypeRoot = Object.create({}) as Record<string, unknown>;
+    customPrototypeRoot.library = { projectDir: ".", allow: [] };
+    Object.defineProperty(customPrototypeRoot, "trap", {
+      get() {
+        customPrototypeGetterInvoked = true;
+        return "must not run";
+      },
+    });
+
+    expect(() => normalizeConfig(new ConfigClass(), "/repo")).toThrowError(
+      /\[BB_CONFIG_INVALID\].*config/,
+    );
+    expect(classGetterInvoked).toBe(false);
+    expect(() => normalizeConfig(customPrototypeRoot, "/repo")).toThrowError(
+      /\[BB_CONFIG_INVALID\].*config/,
+    );
+    expect(customPrototypeGetterInvoked).toBe(false);
+  });
+
   it("library 필드가 없으면 거절한다", () => {
     expect(() => normalizeConfig({}, "/repo")).toThrowError(
       /\[BB_CONFIG_INVALID\].*library/,
@@ -48,6 +81,41 @@ describe("normalizeConfig", () => {
     expect(() =>
       normalizeConfig({ library: "not-an-object" }, "/repo"),
     ).toThrowError(/\[BB_CONFIG_INVALID\].*library/);
+  });
+
+  // 잡는 생산 결함: library의 prototype을 검사하지 않으면 class instance와
+  // 사용자 정의 prototype object의 projectDir getter를 실행한다.
+  it("library는 class instance나 사용자 정의 prototype object를 getter 실행 없이 거절한다", () => {
+    let classGetterInvoked = false;
+    class LibraryClass {
+      projectDir = ".";
+      allow = [];
+
+      get trap() {
+        classGetterInvoked = true;
+        return "must not run";
+      }
+    }
+
+    let customPrototypeGetterInvoked = false;
+    const customPrototypeLibrary = Object.create({}) as Record<string, unknown>;
+    customPrototypeLibrary.projectDir = ".";
+    customPrototypeLibrary.allow = [];
+    Object.defineProperty(customPrototypeLibrary, "trap", {
+      get() {
+        customPrototypeGetterInvoked = true;
+        return "must not run";
+      },
+    });
+
+    expect(() =>
+      normalizeConfig({ library: new LibraryClass() }, "/repo"),
+    ).toThrowError(/\[BB_CONFIG_INVALID\].*library/);
+    expect(classGetterInvoked).toBe(false);
+    expect(() =>
+      normalizeConfig({ library: customPrototypeLibrary }, "/repo"),
+    ).toThrowError(/\[BB_CONFIG_INVALID\].*library/);
+    expect(customPrototypeGetterInvoked).toBe(false);
   });
 
   it("projectDir이 빈 문자열이면 거절한다", () => {
@@ -139,6 +207,62 @@ describe("normalizeConfig", () => {
     ).toThrowError(/\[BB_CONFIG_INVALID\].*library\.allow\[0\]/);
   });
 
+  // 잡는 생산 결함: allowance item의 prototype을 검사하지 않으면 class
+  // instance와 사용자 정의 prototype object의 file getter를 실행한다.
+  it("allowance item은 class instance나 사용자 정의 prototype object를 getter 실행 없이 거절한다", () => {
+    let classGetterInvoked = false;
+    class AllowanceClass {
+      file = "a.js";
+      name = "lib";
+      reason = "ok";
+
+      get trap() {
+        classGetterInvoked = true;
+        return "must not run";
+      }
+    }
+
+    let customPrototypeGetterInvoked = false;
+    const customPrototypeAllowance = Object.create({}) as Record<
+      string,
+      unknown
+    >;
+    customPrototypeAllowance.file = "a.js";
+    customPrototypeAllowance.name = "lib";
+    customPrototypeAllowance.reason = "ok";
+    Object.defineProperty(customPrototypeAllowance, "trap", {
+      get() {
+        customPrototypeGetterInvoked = true;
+        return "must not run";
+      },
+    });
+
+    expect(() =>
+      normalizeConfig(
+        {
+          library: {
+            projectDir: ".",
+            allow: [new AllowanceClass()],
+          },
+        },
+        "/repo",
+      ),
+    ).toThrowError(/\[BB_CONFIG_INVALID\].*library\.allow\[0\]/);
+    expect(classGetterInvoked).toBe(false);
+    expect(() =>
+      normalizeConfig(
+        {
+          library: {
+            projectDir: ".",
+            allow: [customPrototypeAllowance],
+          },
+        },
+        "/repo",
+      ),
+    ).toThrowError(/\[BB_CONFIG_INVALID\].*library\.allow\[0\]/);
+    expect(customPrototypeGetterInvoked).toBe(false);
+  });
+
   it("allow 항목의 file/name/reason이 own non-empty string이 아니면 거절한다", () => {
     expect(() =>
       normalizeConfig(
@@ -177,7 +301,45 @@ describe("normalizeConfig", () => {
     ).toThrowError(/\[BB_CONFIG_INVALID\].*library\.allow\[0\]\.reason/);
   });
 
-  it("allow 항목의 file/name이 상속 property면 거절한다", () => {
+  it("allow 항목의 file/name/reason이 공백만으로 이루어지면 거절한다", () => {
+    expect(() =>
+      normalizeConfig(
+        {
+          library: {
+            projectDir: ".",
+            allow: [{ file: "   ", name: "lib", reason: "ok" }],
+          },
+        },
+        "/repo",
+      ),
+    ).toThrowError(/\[BB_CONFIG_INVALID\].*library\.allow\[0\]\.file/);
+
+    expect(() =>
+      normalizeConfig(
+        {
+          library: {
+            projectDir: ".",
+            allow: [{ file: "a.js", name: "\t\n", reason: "ok" }],
+          },
+        },
+        "/repo",
+      ),
+    ).toThrowError(/\[BB_CONFIG_INVALID\].*library\.allow\[0\]\.name/);
+
+    expect(() =>
+      normalizeConfig(
+        {
+          library: {
+            projectDir: ".",
+            allow: [{ file: "a.js", name: "lib", reason: "  " }],
+          },
+        },
+        "/repo",
+      ),
+    ).toThrowError(/\[BB_CONFIG_INVALID\].*library\.allow\[0\]\.reason/);
+  });
+
+  it("사용자 정의 prototype을 가진 allow 항목을 거절한다", () => {
     const proto = { name: "lib" };
     const item = Object.create(proto) as Record<string, unknown>;
     item.file = "a.js";
@@ -185,7 +347,7 @@ describe("normalizeConfig", () => {
 
     expect(() =>
       normalizeConfig({ library: { projectDir: ".", allow: [item] } }, "/repo"),
-    ).toThrowError(/\[BB_CONFIG_INVALID\].*library\.allow\[0\]\.name/);
+    ).toThrowError(/\[BB_CONFIG_INVALID\].*library\.allow\[0\]/);
   });
 
   it("file + name 중복을 거절한다", () => {

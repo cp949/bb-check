@@ -20,9 +20,18 @@ const invalid = (path: string, reason: string): never => {
   );
 };
 
-/** 배열이 아닌 순수 object인지 확인한다. prototype chain은 검사하지 않는다. */
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+/**
+ * 배열이 아닌 실제 plain object인지 확인한다. Object prototype 또는 null
+ * prototype만 허용하며, property를 읽지 않고 prototype만 확인하므로 hostile
+ * getter를 실행하지 않는다.
+ */
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
 
 /**
  * own property를 세 가지로 분류해 읽는다: 전혀 없음(absent), own이지만
@@ -67,7 +76,14 @@ const readOwnDataProperty = (
   return { present: true, value: read.value };
 };
 
-/** own non-empty string property를 읽는다. 없거나 문자열이 아니면 거절한다. */
+/**
+ * own non-empty string property를 읽는다. 없거나 문자열이 아니면 거절한다.
+ * 공백만으로 이루어진 문자열(예: `"   "`)도 빈 문자열과 동일하게
+ * 거절한다 — trim 후 길이만 검사하며 반환값 자체는 trim하지 않는다(원본
+ * 문자열을 그대로 돌려준다). 이 검사를 통과하지 못한 값은 여기서 항상
+ * BB_CONFIG_INVALID로 걸러지므로, 이후 단계(예: compat-scanner의 allow
+ * 매칭)가 공백뿐인 file/name/reason을 볼 일이 없다.
+ */
 const readOwnNonEmptyString = (
   obj: object,
   key: string,
@@ -77,6 +93,8 @@ const readOwnNonEmptyString = (
   if (!present) throw invalid(path, "own 속성이 없습니다");
   if (typeof value !== "string") throw invalid(path, "문자열이어야 합니다");
   if (value.length === 0) throw invalid(path, "빈 문자열일 수 없습니다");
+  if (value.trim().length === 0)
+    throw invalid(path, "공백만으로 이루어진 문자열일 수 없습니다");
   return value;
 };
 

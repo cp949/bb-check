@@ -182,12 +182,9 @@ const main = async () => {
       });
     }
 
-    // --help(또는 그에 준하는 인자)가 미해결 dependency 없이 도는지
-    // 확인한다 — `library check` 서브커맨드 자체의 UX(--help 지원 여부)는
-    // Task 9의 몫이라 exit code를 0으로 강제하지 않는다. 여기서는 "bundle이
-    // standalone으로 완전히 로드·실행되는가"만 확인한다: 알려진 두 출구
-    // (usage 안내 후 exit 2, 또는 실제 --help 처리 후 exit 0)만 허용하고,
-    // 미해결 모듈 오류로 인한 크래시는 확실히 걸러낸다.
+    // --help가 미해결 dependency 없이 standalone으로 로드·실행되고, 셸
+    // 관례대로 exit 0으로 끝나는지 확인한다(usage ERROR가 아니라 usage
+    // REQUEST이므로 0이 맞다 — CLI 자체가 --help/-h를 명시적으로 처리한다).
     const helpResult = run(
       "npx bb-check --help",
       "npx",
@@ -195,10 +192,35 @@ const main = async () => {
       { cwd: consumerDir },
     );
     expectNoUnresolvedModule("npx bb-check --help", helpResult);
-    if (![0, 2].includes(helpResult.status)) {
+    if (helpResult.status !== 0) {
       throw new Error(
-        `npx bb-check --help: 예상치 못한 exit ${helpResult.status}.\n` +
+        `npx bb-check --help: exit 0을 기대했지만 ${helpResult.status}이었다.\n` +
           `stdout:\n${helpResult.stdout}\nstderr:\n${helpResult.stderr}`,
+      );
+    }
+    if (!helpResult.stdout.includes("사용법:")) {
+      throw new Error(
+        `npx bb-check --help: stdout에 사용법 안내가 없다.\nstdout:\n${helpResult.stdout}`,
+      );
+    }
+
+    // --version도 같은 계약(exit 0, stdout에 버전)을 지키는지 확인한다.
+    const versionResult = run(
+      "npx bb-check --version",
+      "npx",
+      ["--no-install", "bb-check", "--version"],
+      { cwd: consumerDir },
+    );
+    expectNoUnresolvedModule("npx bb-check --version", versionResult);
+    if (versionResult.status !== 0) {
+      throw new Error(
+        `npx bb-check --version: exit 0을 기대했지만 ${versionResult.status}이었다.\n` +
+          `stdout:\n${versionResult.stdout}\nstderr:\n${versionResult.stderr}`,
+      );
+    }
+    if (versionResult.stdout.trim().length === 0) {
+      throw new Error(
+        `npx bb-check --version: stdout이 비어 있다(버전 문자열을 기대함).`,
       );
     }
 

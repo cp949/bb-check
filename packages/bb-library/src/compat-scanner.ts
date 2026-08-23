@@ -24,7 +24,12 @@ import type {
   MemberExpression,
   Program,
 } from "acorn";
-import type { BrowserBaseline, LibraryAllowance } from "@cp949/bb-core";
+import {
+  BbError,
+  compareCodePoint,
+  type BrowserBaseline,
+  type LibraryAllowance,
+} from "@cp949/bb-core";
 import {
   buildCompatIndex,
   ERROR_CAUSE_CONSTRUCTORS,
@@ -176,6 +181,8 @@ export interface CompatScannerOptions {
 
 export interface CompatScanner {
   (source: string, file: string): readonly CompatFinding[];
+  /** BCD가 browser key 자체를 제공하지 않아 runtime API 판정을 할 수 없는 baseline 항목. */
+  readonly unsupportedBrowsers: CompatIndex["unsupportedBrowsers"];
   /**
    * allowed 항목별 실제 매칭 횟수. key는 `${file}\0${name}`(정확히 그
    * allowed 항목의 file/name 원본 값 기준 — file이 "*"면 키에도 "*"가
@@ -191,10 +198,12 @@ const allowanceKey = (file: string, name: string): string => `${file}\0${name}`;
 /**
  * baseline과 allowed 예외에 맞춰 runtime API 스캐너를 만든다.
  *
- * @throws {Error} allowed 항목의 file/name/reason 중 하나라도 비어 있으면.
+ * @throws {BbError} (code: BB_CONFIG_INVALID) allowed 항목의 file/name/reason
+ *   중 하나라도 비어 있거나 공백만으로 이루어져 있으면.
  *   (packages/core의 normalizeConfig가 config 경로에서는 이미 같은 규칙을
  *   강제하지만, 이 함수는 config를 거치지 않고 직접 호출될 수도 있으므로
- *   스스로도 방어한다.)
+ *   스스로도 방어한다 — 그 direct-API 경로에서도 checkLibrary의 오류
+ *   분류 계약대로 BbError를 던진다.)
  */
 export function createCompatScanner(
   options: CompatScannerOptions,
@@ -206,8 +215,9 @@ export function createCompatScanner(
       entry.name.trim() === "" ||
       entry.reason.trim() === ""
     ) {
-      throw new Error(
-        `allowed 항목의 file/name/reason은 비어 있지 않은 문자열이어야 합니다: ${JSON.stringify(entry)}`,
+      throw new BbError(
+        "BB_CONFIG_INVALID",
+        `[BB_CONFIG_INVALID] allowed 항목의 file/name/reason은 비어 있지 않은 문자열이어야 합니다: ${JSON.stringify(entry)}`,
       );
     }
   }
@@ -388,16 +398,19 @@ export function createCompatScanner(
     });
 
     // 줄 번호 오름차순, 같은 줄이면 이름의 코드포인트 순. localeCompare는
-    // 로케일에 따라 결과가 갈려 출력이 환경마다 흔들릴 수 있어 쓰지 않는다.
+    // 로케일에 따라 결과가 갈려 출력이 환경마다 흔들릴 수 있어 쓰지 않는다
+    // (compareCodePoint는 @cp949/bb-core가 sortFindings와 공유하는 비교자다).
     results.sort((a, b) => {
       const lineDiff = (a.line ?? 0) - (b.line ?? 0);
       if (lineDiff !== 0) return lineDiff;
-      if (a.name === b.name) return 0;
-      return a.name < b.name ? -1 : 1;
+      return compareCodePoint(a.name, b.name);
     });
 
     return results;
   };
 
-  return Object.assign(scan, { allowanceMatchCounts }) satisfies CompatScanner;
+  return Object.assign(scan, {
+    allowanceMatchCounts,
+    unsupportedBrowsers: index.unsupportedBrowsers,
+  }) satisfies CompatScanner;
 }

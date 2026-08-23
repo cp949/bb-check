@@ -44,7 +44,12 @@ jobs:
       - name: typecheck
         run: npm run typecheck
 
+      - name: build
+        run: npm run build
+
       - name: unit/integration test (vitest)
+        # build 이후에 돈다 — packages/bb-check/test/package-declaration-bundle.test.ts가
+        # packages/bb-check/dist/*.d.ts를 읽으므로, build 산출물이 먼저 있어야 한다.
         run: npm test
 
       - name: 공개 정보 scanner 자체의 unit/integration test
@@ -53,9 +58,6 @@ jobs:
         # 이 파일을 제외한다) — 여기서 별도로 돌려 CI에서 계속 검증되게 한다.
         run: node --test scripts/check-public-words.test.mjs
 
-      - name: build
-        run: npm run build
-
       - name: demo build (fixture 생성)
         run: npm run build --workspace=apps/demo
 
@@ -63,12 +65,15 @@ jobs:
         run: npm exec --workspace=apps/demo -- bb-check library check --config ./bb-check.config.mjs --dir ./fixtures/compatible
 
       - name: demo 재현 — incompatible fixture (exit 1이어야 함)
-        # bb-check library check는 위반이 있으면 exit 1로 끝난다 — 이 step
-        # 에서는 그 exit 1이 "성공"이므로 `!`로 뒤집는다. exit 0으로
-        # 끝나버리면(위반을 못 찾으면) 이 step 자체가 실패해야 한다.
+        # bb-check library check는 위반이면 exit 1이다. `! command`는 exit 2
+        # 같은 실행 오류도 성공으로 뒤집으므로, 여기서는 정확히 exit 1만 허용한다.
         run: |
-          if npm exec --workspace=apps/demo -- bb-check library check --config ./bb-check.config.mjs --dir ./fixtures/incompatible; then
-            echo "::error::incompatible fixture 검사가 exit 0으로 끝났다(exit 1을 기대함)."
+          set +e
+          npm exec --workspace=apps/demo -- bb-check library check --config ./bb-check.config.mjs --dir ./fixtures/incompatible
+          exit_code=$?
+          set -e
+          if [ "$exit_code" -ne 1 ]; then
+            echo "::error::incompatible fixture 검사가 exit $exit_code로 끝났다(exit 1을 기대함)."
             exit 1
           fi
 
@@ -100,9 +105,9 @@ jobs:
 
   # Ubuntu + Node 20: ubuntu-node22가 만든 tarball을 내려받아, 그 안의
   # dist/**를 그대로 복원한 뒤 packed-package runtime test만 돈다(install/
-  # lint/build 등은 하지 않는다). @cp949/bb-check의 package.json#engines는
-  # ">=22.12"를 요구하므로, 이 job은 "그 요구를 벗어난 Node에서 실제로
-  # 설치·실행하면 무슨 일이 일어나는가"를 있는 그대로 관찰하는 job이다.
+  # lint/build 등은 하지 않는다). @cp949/bb-check의 package.json#engines
+  # (>=20) 계약에 따라, 이 job은 지원 범위인 Node 20에서 packed runtime을
+  # 실제로 설치·실행한다.
   ubuntu-node20-packed-runtime:
     name: ubuntu-node20 (packed-package runtime only)
     needs: ubuntu-node22

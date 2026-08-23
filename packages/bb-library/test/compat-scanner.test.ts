@@ -7,6 +7,7 @@
 // @mdn/browser-compat-data@8.0.12의 실제 값이다(package.json 참고).
 
 import { describe, expect, it } from "vitest";
+import { BbError } from "@cp949/bb-core";
 import { createCompatScanner } from "../src/index.js";
 
 const baseline = { chrome: "80" };
@@ -44,6 +45,29 @@ describe("createCompatScanner: 옵션 검증", () => {
         allowed: [{ file: "*", name: "x", reason: "" }],
       }),
     ).toThrow(/file\/name\/reason/);
+  });
+
+  it("allowed 항목이 공백만으로 이루어져도 던진다", () => {
+    expect(() =>
+      createCompatScanner({
+        baseline,
+        allowed: [{ file: "   ", name: "x", reason: "r" }],
+      }),
+    ).toThrow(/file\/name\/reason/);
+  });
+
+  it("옵션 검증 실패는 BB_CONFIG_INVALID BbError다(일반 Error가 아니다)", () => {
+    let caught: unknown;
+    try {
+      createCompatScanner({
+        baseline,
+        allowed: [{ file: "", name: "x", reason: "r" }],
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(BbError);
+    expect((caught as BbError).code).toBe("BB_CONFIG_INVALID");
   });
 
   it("scan은 함수이고 allowanceMatchCounts를 함께 들고 있다", () => {

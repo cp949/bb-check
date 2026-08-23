@@ -9,5 +9,5 @@ export type {
   NormalizedBbCheckConfig,
 } from "./types.js";
 export { BbError } from "./errors.js";
-export { sortFindings } from "./sort-findings.js";
+export { sortFindings, compareCodePoint } from "./sort-findings.js";
 export { normalizeConfig } from "./config.js";

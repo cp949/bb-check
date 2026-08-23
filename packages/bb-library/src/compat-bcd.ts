@@ -204,9 +204,12 @@ type SupportBlockLike = Readonly<Record<string, CompatSupportInput>>;
  * 만든다. baseline에 있지만 BCD가 이 API에 대해 아예 추적하지 않는
  * 브라우저는 조용히 건너뛴다(판정 근거가 없으므로 보류) — 이는 baseline
  * 브라우저 이름이 BCD의 브라우저 이름(chrome, firefox, safari 등)과
- * 그대로 일치한다고 가정한다는 뜻이기도 하다. browserslist가 만드는
- * 이름 중 일부(and_chr, ios_saf 등 모바일 변형)는 BCD 이름과 다르며, 이
- * 모듈은 그 변환을 하지 않는다 — 알려진 한계로 남겨둔다(주석 하단 참고).
+ * 그대로 일치한다고 가정한다는 뜻이기도 하다. browserslist가 만드는 이름
+ * 중 일부(and_chr, ios_saf 등 모바일 변형)는 BCD 이름과 다른데, 그 변환은
+ * 이 모듈이 아니라 baseline.ts(BCD_BROWSER_NAME_ALIASES/toBcdBrowserName)가
+ * BrowserBaseline을 만드는 시점에 이미 끝마친다 — 이 함수가 받는
+ * baseline은 그 변환이 끝난 뒤의 값이므로, 여기서는 더 이상 살아있는
+ * 제약이 아니다.
  */
 function evaluateAgainstBaseline(
   support: SupportBlockLike | undefined,
@@ -270,6 +273,8 @@ export interface CompatCandidate {
 }
 
 export interface CompatIndex {
+  /** BCD 전체에 browser key가 없어 runtime API 판정을 수행할 수 없는 baseline 항목. */
+  readonly unsupportedBrowsers: readonly UnsupportedBaselineBrowser[];
   /** 맨몸 전역 식별자 이름 -> candidate. */
   readonly globals: ReadonlyMap<string, CompatCandidate>;
   /** "Owner.member" -> candidate. Owner는 BCD 인터페이스/빌트인 이름(전역 식별자와 같은 이름)이다. */
@@ -289,6 +294,11 @@ export interface CompatIndex {
   readonly knownGlobalTypes: ReadonlyMap<string, string>;
   /** tier 3(옵션 서브피처) 후보. 이름은 이 모듈이 고정으로 아는 것들뿐이다. */
   readonly optionFeatures: ReadonlyMap<string, CompatCandidate>;
+}
+
+export interface UnsupportedBaselineBrowser {
+  readonly browser: string;
+  readonly baselineVersion: string;
 }
 
 const KNOWN_GLOBAL_TYPES: ReadonlyMap<string, string> = new Map([
@@ -457,10 +467,17 @@ interface InstanceMemberContribution {
  * 대상은 api.*와 javascript.builtins.* 전체다. 도입이 baseline보다 늦거나
  * (issues에 "not-yet-added") 제거된 적이 있는(issues에 "removed") 항목만
  * 색인에 남는다 — baseline 이전부터 지원됐거나 baseline 시점에 이미
- * 지원되는 API는 아예 후보에 오르지 않는다.
+ * 지원되는 API는 아예 후보에 오르지 않는다. BCD browsers에 key
+ * 자체가 없는 baseline 항목은 unsupportedBrowsers에 별도로 보존한다.
  */
 export function buildCompatIndex(baseline: BrowserBaseline): CompatIndex {
   const bcd = loadBcd();
+  const unsupportedBrowsers = Object.entries(baseline)
+    .filter(([browser]) => !Object.hasOwn(bcd.browsers, browser))
+    .map(([browser, baselineVersion]) => ({ browser, baselineVersion }))
+    .sort((a, b) =>
+      a.browser < b.browser ? -1 : a.browser > b.browser ? 1 : 0,
+    );
   const globals = new Map<string, CompatCandidate>();
   const staticMembers = new Map<string, CompatCandidate>();
 
@@ -609,6 +626,7 @@ export function buildCompatIndex(baseline: BrowserBaseline): CompatIndex {
   }
 
   return {
+    unsupportedBrowsers,
     globals,
     staticMembers,
     instanceMembers,

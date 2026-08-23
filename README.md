@@ -19,7 +19,7 @@ JavaScript(`dist/**`)가 그 선언을 지키는지는 보통 아무도 자동�
 npm install --save-dev @cp949/bb-check
 ```
 
-Node 22.12 이상이 필요하다(아래 [Node 지원](#node-지원) 참고). 검사
+Node 20 이상이 필요하다(아래 [Node 지원](#node-지원) 참고). 검사
 대상 라이브러리 자체가 지원해야 하는 Node/브라우저 버전과는 별개다 —
 `bb-check`를 실행하는 환경의 요구사항이다.
 
@@ -35,13 +35,25 @@ export default defineConfig({
     // 검사 대상 프로젝트 디렉터리. package.json#browserslist와
     // package.json#exports를 여기서 읽는다.
     projectDir: ".",
-    // 특정 파일의 특정 런타임 API 사용을 예외로 허용한다. reason은
-    // 사람이 읽는 근거이며 검사에는 영향을 주지 않는다.
+    // 특정 파일의 특정 런타임 API 사용을 예외로 허용한다. file/name/reason
+    // 모두 비어 있거나 공백만으로는 이루어질 수 없는 필수 문자열이다.
+    // reason은 사람이 읽는 근거이며 검사 판정 자체에는 영향을 주지
+    // 않지만 없으면 config 자체가 거부된다(BB_CONFIG_INVALID) — 선택
+    // 항목이 아니다.
     allow: [
       {
         file: "dist/index.js",
         name: "structuredClone",
         reason: "feature-detection으로 감싸 호출한다",
+      },
+      // file에 "*"를 쓰면 특정 파일이 아니라 모든 파일에서 그 name을
+      // 허용한다 — 예를 들어 typeof 가드 안에서 쓰는 API처럼 어느
+      // 파일에서 나올지 예측하기 어려운 경우([알려진 범위](#알려진-범위)
+      // 참고) 파일마다 항목을 반복하지 않고 한 번에 면제하는 용도다.
+      {
+        file: "*",
+        name: "structuredClone",
+        reason: "typeof 가드 안에서 쓰는 어떤 파일이든 허용한다",
       },
     ],
   },
@@ -54,10 +66,16 @@ export default defineConfig({
 npx bb-check library check [--config <path>] [--dir <path>] [--debug]
 ```
 
-- `--config`: config 파일 경로. 없으면 cwd부터 가장 가까운
-  `package.json` 디렉터리까지 `bb-check.config.mjs`를 찾는다.
+- `--config`: config 파일 경로. **cwd 기준** 상대 경로로 해석한다. 없으면
+  cwd부터 가장 가까운 `package.json` 디렉터리까지 `bb-check.config.mjs`를
+  찾는다.
 - `--dir`: 검사 대상 프로젝트 디렉터리. 있으면 config의
-  `library.projectDir`보다 우선한다.
+  `library.projectDir`보다 우선한다. **cwd가 아니라 config 파일이 위치한
+  디렉터리 기준**으로 해석한다 — `--config`와 기준이 다르다(이는
+  `library.projectDir`도 마찬가지다: config 파일 자신의 디렉터리
+  기준이다). 예를 들어 `--config ./configs/lib.config.mjs --dir ./target`을
+  cwd가 아닌 다른 위치에서 실행하면, `./target`은 `./configs/target`으로
+  풀린다.
 - `--debug`: 오류 발생 시 stderr에 원인 체인의 stack trace까지 출력한다.
 
 검사 절차: 대상 `package.json#browserslist`에서 브라우저별 최소 버전
@@ -67,10 +85,16 @@ npx bb-check library check [--config <path>] [--dir <path>] [--debug]
 있으면(외부 파일 또는 inline data URL) 위반 위치를 원본 소스로
 되짚는다.
 
+진입점은 오직 `package.json#exports`에서만 모은다 — `main`/`module`
+필드는 읽지 않는다. `exports`가 없거나, 있어도 실제 디스크에 존재하는
+`.js`/`.mjs`/`.cjs` 파일을 하나도 가리키지 않으면(`main`만 있는
+라이브러리 포함) 검사할 진입점이 없다는 뜻이므로 `BB_INPUT_NOT_FOUND`로
+실패한다 — 미리 알아 두지 않으면 놀랄 수 있는 요구사항이다.
+
 ## finding 축
 
-| 축           | 의미                                                          |
-| ------------ | ------------------------------------------------------------- |
+| 축           | 의미                                                           |
+| ------------ | -------------------------------------------------------------- |
 | `syntax`     | 기준선 esbuild target으로 다시 써야 하는 문법(트랜스파일 누락) |
 | `runtime-js` | 기준선 브라우저가 아직/전혀 지원하지 않는 런타임 API 사용      |
 | `dependency` | 배포 산출물에 남은, 설치·번들 보장이 안 되는 외부 참조         |
@@ -91,15 +115,15 @@ finding의 `name`은 다음 중 하나다.
 
 ## exit code
 
-| exit | 의미                                    |
-| ---- | --------------------------------------- |
-| `0`  | 통과                                    |
+| exit | 의미                                                                     |
+| ---- | ------------------------------------------------------------------------ |
+| `0`  | 통과                                                                     |
 | `1`  | 위반이 있거나(`findings.length > 0`) 검사가 불완전함(`incomplete: true`) |
-| `2`  | 사용법/설정/환경 오류                   |
+| `2`  | 사용법/설정/환경 오류                                                    |
 
 ## Node 지원
 
-`@cp949/bb-check` CLI 자체는 Node 22.12 이상에서 실행해야 한다
+`@cp949/bb-check` CLI 자체는 Node 20 이상에서 실행해야 한다
 (`package.json#engines`). 그보다 낮은 Node에서 설치·실행했을 때의
 동작은 보증하지 않는다.
 
@@ -122,9 +146,9 @@ finding의 `name`은 다음 중 하나다.
 - 일부 오래되었거나 드문 브라우저(`and_qq`, `and_uc`, `baidu`, `bb`,
   `ie_mob`, `kaios`, `op_mini`)는 `@mdn/browser-compat-data`에 대응
   데이터가 없어 `runtime-js` 축에서 그 브라우저만 특정해 검사할 수
-  없다. 데스크톱 브라우저와 매핑된 모바일 브라우저 6종(Chrome/
-  Firefox/Safari/Samsung Internet/Opera/WebView Android, Safari iOS)은
-  전부 검사된다.
+  없다. BCD 이름으로 매핑된 모바일 브라우저 6종(Chrome Android, Firefox
+  Android, Safari iOS, Samsung Internet Android, Opera Android, WebView
+  Android)은 전부 검사된다.
 
 ## 예제
 

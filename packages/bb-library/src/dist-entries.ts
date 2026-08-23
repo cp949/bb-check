@@ -54,6 +54,18 @@ const isRealFile = async (path: string): Promise<boolean> => {
   }
 };
 
+export type InvalidDistTargetReason = "absolute" | "outside-root" | "missing";
+
+export interface InvalidDistTarget {
+  readonly target: string;
+  readonly reason: InvalidDistTargetReason;
+}
+
+export interface DistEntryResolution {
+  readonly entries: readonly string[];
+  readonly invalidTargets: readonly InvalidDistTarget[];
+}
+
 const readPackageJson = async (
   projectDir: string,
 ): Promise<Record<string, unknown>> => {
@@ -90,25 +102,23 @@ const readPackageJson = async (
 
 /**
  * 대상 프로젝트의 package.json#exports를 순회해 실제로 존재하는 배포
- * JavaScript(.js/.mjs/.cjs) 진입점의 절대 경로를 정렬·중복 제거해
- * 반환한다.
+ * JavaScript(.js/.mjs/.cjs) 진입점의 절대 경로와 판정할 수 없는
+ * JavaScript target을 각각 정렬·중복 제거해 반환한다.
  *
- * 다음은 결과에서 제외한다:
- * - package root 밖으로 정규화되는 경로(상대 경로 탈출, 절대 경로 값)
- * - 디스크에 실제로 존재하지 않는 파일
- * - JS가 아닌 산출물(types 선언, CSS, JSON, source map 등 — 확장자가
- *   .js/.mjs/.cjs가 아닌 모든 것)
+ * JS가 아닌 산출물(types 선언, CSS, JSON, source map 등)은 제외하지만,
+ * 절대 경로·package root 탈출·missing JS target은 invalidTargets에 보존한다.
  *
- * 이렇게 걸러낸 뒤 남는 진입점이 하나도 없으면 BB_INPUT_NOT_FOUND.
+ * JavaScript leaf 자체가 하나도 없으면 BB_INPUT_NOT_FOUND. JavaScript
+ * leaf가 있지만 전부 판정 불가면 빈 entries와 invalidTargets를 반환한다.
  *
  * @param projectDir package.json이 있는 대상 프로젝트 디렉터리(절대 경로 권장).
  * @throws {BbError} BB_INPUT_NOT_FOUND — package.json을 찾을 수 없거나,
- *   수집된 실제 JS 진입점이 하나도 없음.
+ *   package.json#exports에 JavaScript leaf 자체가 하나도 없음.
  * @throws {BbError} BB_CONFIG_INVALID — package.json이 JSON이 아니거나 object가 아님.
  */
 export async function resolveDistEntries(
   projectDir: string,
-): Promise<string[]> {
+): Promise<DistEntryResolution> {
   const pkg = await readPackageJson(projectDir);
   const root = resolve(projectDir);
 
@@ -118,18 +128,35 @@ export async function resolveDistEntries(
   }
 
   const resolved = new Set<string>();
+  const invalidTargets = new Map<string, InvalidDistTarget>();
+  const addInvalidTarget = (
+    target: string,
+    reason: InvalidDistTargetReason,
+  ): void => {
+    invalidTargets.set(`${target}\0${reason}`, { target, reason });
+  };
+
   for (const leaf of leaves) {
     if (!isJsFile(leaf)) continue;
-    if (isAbsolute(leaf)) continue; // exports subpath 값은 상대 경로여야 한다
+    if (isAbsolute(leaf)) {
+      addInvalidTarget(leaf, "absolute");
+      continue;
+    }
 
     const candidate = resolve(root, leaf);
-    if (!isWithinRoot(root, candidate)) continue;
-    if (!(await isRealFile(candidate))) continue;
+    if (!isWithinRoot(root, candidate)) {
+      addInvalidTarget(leaf, "outside-root");
+      continue;
+    }
+    if (!(await isRealFile(candidate))) {
+      addInvalidTarget(leaf, "missing");
+      continue;
+    }
 
     resolved.add(candidate);
   }
 
-  if (resolved.size === 0) {
+  if (resolved.size === 0 && invalidTargets.size === 0) {
     throw new BbError(
       "BB_INPUT_NOT_FOUND",
       `[BB_INPUT_NOT_FOUND] ${projectDir}의 package.json#exports에서 실제 ` +
@@ -137,5 +164,11 @@ export async function resolveDistEntries(
     );
   }
 
-  return [...resolved].sort();
+  return {
+    entries: [...resolved].sort(),
+    invalidTargets: [...invalidTargets.values()].sort((a, b) => {
+      if (a.target !== b.target) return a.target < b.target ? -1 : 1;
+      return a.reason < b.reason ? -1 : a.reason > b.reason ? 1 : 0;
+    }),
+  };
 }

@@ -23,6 +23,11 @@ export default tseslint.config(
       globals: {
         process: "readonly",
         console: "readonly",
+        Buffer: "readonly",
+        TextDecoder: "readonly",
+        TextEncoder: "readonly",
+        URL: "readonly",
+        URLSearchParams: "readonly",
       },
     },
   },

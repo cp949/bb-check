@@ -5,6 +5,7 @@
 // 내장 test runner로 돈다(root package.json의 "test"는 이 파일을
 // --exclude로 제외한다) — `node --test scripts/check-public-words.test.mjs`.
 
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -200,5 +201,79 @@ describe("check-public-words.mjs CLI: 제네릭 모드", () => {
       env: { ...process.env, BB_CHECK_FORBIDDEN_WORDS: "" },
     });
     assert.equal(result.status, 0, result.stdout + result.stderr);
+  });
+});
+
+// dist/**는 .gitignore 대상이라 git ls-files로는 절대 보이지 않는다 —
+// 유일하게 도달 가능한 경로는 npm pack --dry-run --json이 알려주는 tarball
+// 파일 목록(listTarballRoots)뿐이다. 아래 테스트는 packages/bb-check/dist
+// 안에 실제 파일을 하나 심어(tracked source 어디에도 없는 합성 pattern을
+// 담아) --release 스캔이 그 파일을 실제로 tarball-listing 경로로 찾아내는지
+// 확인한다 — "matches 배열에 뭔가 있다"가 아니라, git ls-files 쪽 경로가
+// 아니라 tarball 쪽 경로(packages/bb-check/dist/...)로 찾아냈음을 직접
+// 검증한다.
+describe("check-public-words.mjs CLI: dist/**(tarball-only) 경로", () => {
+  // 다른 테스트의 ABSENT_SYNTHETIC_PATTERN과 절대 겹치지 않는 별도
+  // pattern — 이 파일 소스 어디에도 완성된 형태로 나타나지 않도록 조각내
+  // 런타임에만 이어 붙인다(위 ABSENT_SYNTHETIC_PATTERN과 같은 이유).
+  const DIST_ONLY_SYNTHETIC_PATTERN = ["zz-dist-only-probe", "-c71a"].join("");
+
+  const bbCheckPackageDir = join(repoRoot, "packages", "bb-check");
+  const distDir = join(bbCheckPackageDir, "dist");
+  const plantedFileName = "__i6-synthetic-forbidden-probe.js";
+  const plantedFile = join(distDir, plantedFileName);
+  let distDirPreexisted;
+
+  before(async () => {
+    distDirPreexisted = existsSync(distDir);
+    if (!distDirPreexisted) await mkdir(distDir, { recursive: true });
+    await writeFile(plantedFile, `// ${DIST_ONLY_SYNTHETIC_PATTERN}\n`, "utf8");
+  });
+
+  after(async () => {
+    await rm(plantedFile, { force: true });
+    if (!distDirPreexisted) await rm(distDir, { recursive: true, force: true });
+  });
+
+  test("심은 파일은 git ls-files에 나타나지 않는다(dist/**는 gitignore 대상)", () => {
+    const result = spawnSync("git", ["ls-files", "-z"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const tracked = result.stdout.split("\0");
+    assert.ok(
+      !tracked.some((f) => f.endsWith(plantedFileName)),
+      "심은 파일이 git ls-files에 나타났다 — 이 테스트의 전제(dist/**는 " +
+        "untracked)가 깨졌다.",
+    );
+  });
+
+  test("--release 스캔이 dist/** 안의 합성 pattern을 npm pack 경로로 찾아낸다", () => {
+    const result = spawnSync(process.execPath, [scriptPath, "--release"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BB_CHECK_FORBIDDEN_WORDS: DIST_ONLY_SYNTHETIC_PATTERN,
+      },
+    });
+
+    assert.notEqual(
+      result.status,
+      0,
+      "합성 pattern을 심었는데도 --release가 통과했다 — dist/**(tarball-only) " +
+        `경로가 스캔되지 않는다.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    // matches 로그는 pattern 원문이 아니라 file 경로만 남긴다 — 그 file이
+    // git-tracked 경로(README.md 등)가 아니라 tarball 쪽 경로
+    // (packages/bb-check/dist/...)임을 직접 확인해, "다른 어떤 tracked
+    // 파일에서 우연히 매칭됐다"가 아니라 정확히 이 dist 파일을 통해서
+    // 잡혔음을 증명한다.
+    const expectedRoot = `packages/bb-check/dist/${plantedFileName}`;
+    assert.match(
+      result.stderr,
+      new RegExp(expectedRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
   });
 });

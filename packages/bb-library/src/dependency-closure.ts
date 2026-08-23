@@ -32,7 +32,7 @@ import { isBuiltin } from "node:module";
 import { join, posix, win32 } from "node:path";
 import { parse } from "acorn";
 import type { AnyNode, Program } from "acorn";
-import { BbError } from "@cp949/bb-core";
+import { BbError, compareCodePoint } from "@cp949/bb-core";
 
 /** 하드 위반 세 종류. computed-specifier는 정보성이라 따로 구분한다. */
 type LeakKind =
@@ -377,12 +377,12 @@ export async function createDependencyClosureScanner(
     });
 
     // 줄 번호 오름차순, 같은 줄이면 이름의 코드포인트 순. localeCompare는
-    // 로케일에 따라 결과가 갈려 출력이 환경마다 흔들릴 수 있어 쓰지 않는다.
+    // 로케일에 따라 결과가 갈려 출력이 환경마다 흔들릴 수 있어 쓰지 않는다
+    // (compareCodePoint는 @cp949/bb-core가 sortFindings와 공유하는 비교자다).
     results.sort((a, b) => {
       const lineDiff = a.line - b.line;
       if (lineDiff !== 0) return lineDiff;
-      if (a.name === b.name) return 0;
-      return a.name < b.name ? -1 : 1;
+      return compareCodePoint(a.name, b.name);
     });
 
     return results;

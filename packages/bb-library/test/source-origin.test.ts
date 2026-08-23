@@ -70,6 +70,131 @@ describe("createOriginLookup", () => {
     expect(result.originOf(1)).toBe("/abs/src/lib.ts");
   });
 
+  // 잡는 생산 결함: sourceRoot의 마지막 segment를 잘라내면 ECMA-426
+  // DecodeSourceMapSources(trailing slash가 없으면 "/"만 붙인다) 대신
+  // src가 사라진 ../를 sourceURLPrefix로 쓴다.
+  it("trailing slash가 없는 상대 sourceRoot는 slash만 덧붙인 sourceURLPrefix를 쓴다", () => {
+    const mapText = JSON.stringify({
+      version: 3,
+      sourceRoot: "../src",
+      sources: ["input.ts"],
+      mappings: "AAAA",
+    });
+    const result = createOriginLookup(mapText, { mapDir: "packages/a/dist" });
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("unreachable");
+    expect(result.originOf(1)).toBe("packages/a/src/input.ts");
+  });
+
+  // 잡는 생산 결함: present 빈 sourceRoot를 absent처럼 취급하면 §5.2가
+  // 요구하는 sourceURLPrefix '/'를 누락한다.
+  it("빈 sourceRoot는 slash sourceURLPrefix를 만든다", () => {
+    const mapText = JSON.stringify({
+      version: 3,
+      sourceRoot: "",
+      sources: ["input.ts"],
+      mappings: "AAAA",
+    });
+    const result = createOriginLookup(mapText, { mapDir: "dist" });
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("unreachable");
+    expect(result.originOf(1)).toBe("/input.ts");
+  });
+
+  // 잡는 생산 결함: POSIX sourceRoot의 마지막 segment를 잘라내면
+  // /workspace/src/ 대신 src가 사라진 /workspace/를 사용한다.
+  it("trailing slash가 없는 POSIX 절대 sourceRoot는 slash만 덧붙인 sourceURLPrefix를 쓴다", () => {
+    const mapText = JSON.stringify({
+      version: 3,
+      sourceRoot: "/workspace/src",
+      sources: ["nested/input.ts"],
+      mappings: "AAAA",
+    });
+    const result = createOriginLookup(mapText, { mapDir: "packages/a/dist" });
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("unreachable");
+    expect(result.originOf(1)).toBe("/workspace/src/nested/input.ts");
+  });
+
+  // 잡는 생산 결함: Windows sourceRoot의 마지막 segment를 잘라내면
+  // C:/workspace/src/ 대신 src가 사라진 C:/workspace/를 사용한다.
+  it("trailing slash가 없는 Windows 절대 sourceRoot는 slash만 덧붙인 sourceURLPrefix를 쓴다", () => {
+    const mapText = JSON.stringify({
+      version: 3,
+      sourceRoot: "C:\\workspace\\src",
+      sources: ["nested\\input.ts"],
+      mappings: "AAAA",
+    });
+    const result = createOriginLookup(mapText, { mapDir: "packages/a/dist" });
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("unreachable");
+    expect(result.originOf(1)).toBe("C:/workspace/src/nested/input.ts");
+  });
+
+  // 잡는 생산 결함: UNC sourceRoot의 마지막 segment를 잘라내는 문제와
+  // //server/share/... 경로를 posix.normalize에 넘겼을 때 선행 double
+  // slash가 single slash로 축약되는 문제를 동시에 잡는다.
+  it("trailing slash가 없는 UNC sourceRoot는 src를 보존하고 선행 double slash도 보존한다", () => {
+    const mapText = JSON.stringify({
+      version: 3,
+      sourceRoot: "\\\\server\\share\\src",
+      sources: ["nested\\a.ts"],
+      mappings: "AAAA",
+    });
+    const result = createOriginLookup(mapText, { mapDir: "packages/a/dist" });
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("unreachable");
+    expect(result.originOf(1)).toBe("//server/share/src/nested/a.ts");
+  });
+
+  // 잡는 생산 결함: trailing slash가 있는 URL sourceRoot도 prefix 자체에는
+  // 포함되어야 하므로 URL의 마지막 path segment를 잃으면 안 된다.
+  it("trailing slash가 있는 absolute URL sourceRoot를 sourceURLPrefix로 쓴다", () => {
+    const mapText = JSON.stringify({
+      version: 3,
+      sourceRoot: "https://cdn.example.test/pkg/src/",
+      sources: ["nested/input.ts"],
+      mappings: "AAAA",
+    });
+    const result = createOriginLookup(mapText, { mapDir: "packages/a/dist" });
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("unreachable");
+    expect(result.originOf(1)).toBe(
+      "https://cdn.example.test/pkg/src/nested/input.ts",
+    );
+  });
+
+  // 잡는 생산 결함: trailing slash가 없는 URL sourceRoot의 마지막 segment를
+  // 잘라내면 .../pkg/src/ 대신 src가 사라진 .../pkg/를 사용한다.
+  it("trailing slash가 없는 absolute URL sourceRoot는 slash만 덧붙인 sourceURLPrefix를 쓴다", () => {
+    const mapText = JSON.stringify({
+      version: 3,
+      sourceRoot: "https://cdn.example.test/pkg/src",
+      sources: ["nested/input.ts"],
+      mappings: "AAAA",
+    });
+    const result = createOriginLookup(mapText, { mapDir: "packages/a/dist" });
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("unreachable");
+    expect(result.originOf(1)).toBe(
+      "https://cdn.example.test/pkg/src/nested/input.ts",
+    );
+  });
+
+  // 잡는 생산 결함: string이 아닌 sourceRoot를 무시하면 malformed map이
+  // 성공으로 분류되어 상위가 BB_TARGET_PARSE로 다루지 못한다.
+  it("string이 아닌 sourceRoot는 typed parse-failure다", () => {
+    const mapText = JSON.stringify({
+      version: 3,
+      sourceRoot: 123,
+      sources: ["input.ts"],
+      mappings: "AAAA",
+    });
+    expect(createOriginLookup(mapText, { mapDir: "dist" }).kind).toBe(
+      "parse-failure",
+    );
+  });
+
   it("매핑이 없는 line은 undefined를 준다", () => {
     const mapText = JSON.stringify({
       version: 3,

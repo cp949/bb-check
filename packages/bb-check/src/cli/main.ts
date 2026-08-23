@@ -6,7 +6,7 @@
 
 import { BbError } from "@cp949/bb-core";
 import { checkLibrary } from "@cp949/bb-library";
-import { parseArgs } from "./args.js";
+import { parseArgs, USAGE } from "./args.js";
 import { loadConfig } from "../config-loader.js";
 import { renderLibraryReport } from "../report.js";
 
@@ -51,6 +51,12 @@ const writeDebugTrail = (error: unknown, io: CliIo): void => {
   }
 };
 
+/** main()이 추가로 필요로 하는 값. version은 cli.ts가 package.json에서 읽어 전달한다. */
+export interface MainOptions {
+  /** `--version`/`-v`에 출력할 값. cli.ts가 실제 package.json#version을 전달한다. */
+  readonly version?: string;
+}
+
 /**
  * CLI 진입점 로직. argv는 명령 이름 이후(`process.argv.slice(2)`)를
  * 받는다. 반환하는 숫자가 그대로 process exit code다 — 이 함수는
@@ -58,11 +64,26 @@ const writeDebugTrail = (error: unknown, io: CliIo): void => {
  * 있다.
  *
  * exit code: 0 = 통과, 1 = 위반 또는 불완전 판정, 2 = 사용법/설정/환경 오류.
+ *
+ * `--help`/`-h`, `--version`/`-v`는 argv의 위치와 무관하게(예:
+ * `library check --help`도 인식) "must be exactly library check" 거절
+ * 경로보다 먼저 처리하고 exit 0으로 끝난다 — usage 안내를 요청한 사용자를
+ * 오류로 취급하지 않는다(쉘 관례).
  */
 export async function main(
   argv: readonly string[],
   io: CliIo,
+  options: MainOptions = {},
 ): Promise<number> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    io.stdout(`${USAGE}\n`);
+    return EXIT_OK;
+  }
+  if (argv.includes("--version") || argv.includes("-v")) {
+    io.stdout(`${options.version ?? "0.0.0-unknown"}\n`);
+    return EXIT_OK;
+  }
+
   // 사용법 오류(argv 자체가 잘못됨)로 parseArgs가 던지더라도 --debug
   // 요청은 존중해야 하므로, 파싱 성공 여부와 무관하게 raw argv에서 직접 읽는다.
   const debug = argv.includes("--debug");

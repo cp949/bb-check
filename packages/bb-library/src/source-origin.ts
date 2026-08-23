@@ -42,6 +42,26 @@ const toPosixPath = (value: string): string => value.replace(/\\/g, "/");
 
 /** POSIX 절대 경로("/...")나 Windows drive 절대 경로("C:/...")인지 확인한다. */
 const ABSOLUTE_PATH_PATTERN = /^(\/|[A-Za-z]:\/)/;
+const ABSOLUTE_URL_PATTERN = /^[A-Za-z][A-Za-z\d+.-]*:\/\//;
+
+/** POSIX 정규화가 UNC 경로의 선행 double slash를 축약하지 못하게 한다. */
+const normalizePosixPath = (value: string): string => {
+  const normalized = posix.normalize(value);
+  return value.startsWith("//") && !normalized.startsWith("//")
+    ? `/${normalized}`
+    : normalized;
+};
+
+/**
+ * ECMA-426 DecodeSourceMapSources의 sourceUrlPrefix를 sourceRoot에서
+ * 만든다. sourceRoot가 이미 "/"로 끝나면 그대로 쓰고, 아니면 "/"만
+ * 덧붙인다 — sourceRoot를 파일 경로로 보고 마지막 segment를 잘라내는
+ * 것이 아니다(그러면 sourceRoot 전체가 디렉터리 이름 취급되어 유실된다).
+ */
+const sourceUrlPrefix = (sourceRoot: string): string => {
+  const posixRoot = toPosixPath(sourceRoot);
+  return posixRoot.endsWith("/") ? posixRoot : `${posixRoot}/`;
+};
 
 /**
  * source map의 sources 항목 하나를 mapDir 기준으로 정규화한다. 이미
@@ -51,11 +71,14 @@ const ABSOLUTE_PATH_PATTERN = /^(\/|[A-Za-z]:\/)/;
  */
 const resolveSourcePath = (mapDir: string, sourcePath: string): string => {
   const posixSource = toPosixPath(sourcePath);
+  if (ABSOLUTE_URL_PATTERN.test(posixSource)) {
+    return new URL(posixSource).href;
+  }
   if (ABSOLUTE_PATH_PATTERN.test(posixSource)) {
-    return posix.normalize(posixSource);
+    return normalizePosixPath(posixSource);
   }
   const posixMapDir = toPosixPath(mapDir).replace(/\/+$/, "");
-  return posix.normalize(`${posixMapDir}/${posixSource}`);
+  return normalizePosixPath(`${posixMapDir}/${posixSource}`);
 };
 
 const BASE64_VLQ_CHARS =
@@ -160,9 +183,27 @@ export function createOriginLookup(
     return parseFailure("source map#mappings가 문자열이 아닙니다.");
   }
 
-  const sources = (map.sources as string[]).map((source) =>
-    resolveSourcePath(options.mapDir, source),
-  );
+  let sourceRoot: string | undefined;
+  if (Object.hasOwn(map, "sourceRoot")) {
+    if (typeof map.sourceRoot !== "string") {
+      return parseFailure("source map#sourceRoot가 문자열이 아닙니다.");
+    }
+    sourceRoot = map.sourceRoot;
+  }
+
+  let sources: string[];
+  try {
+    sources = (map.sources as string[]).map((source) =>
+      resolveSourcePath(
+        options.mapDir,
+        sourceRoot === undefined
+          ? source
+          : `${sourceUrlPrefix(sourceRoot)}${source}`,
+      ),
+    );
+  } catch (cause) {
+    return parseFailure("source map#sources를 해석할 수 없습니다.", cause);
+  }
 
   let segmentsByLine: MappedSegment[][];
   try {

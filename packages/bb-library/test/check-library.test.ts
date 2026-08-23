@@ -8,12 +8,33 @@
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkLibrary } from "../src/index.js";
+import * as checkLibraryModule from "../src/check-library.js";
 import type { LibraryAllowance } from "@cp949/bb-core";
 
 const fixture = (name: string) => join(import.meta.dirname, "fixtures", name);
+
+describe("checkLibrary: external source map 경로 기준", () => {
+  // 잡는 생산 결함: entry-relative map path를 relFile dirname에 붙이면
+  // win32.relative가 반환한 D:\\maps\\index.js.map absolute path가 dist/D:/...로
+  // 왜곡되어 cross-drive external map의 실제 기준 디렉터리를 잃는다.
+  it("cross-drive Windows external map dirname을 project-relative 결과 그대로 보존한다", () => {
+    const seam = checkLibraryModule as {
+      externalSourceMapDir?: (
+        projectDir: string,
+        mapPath: string,
+        path: typeof win32,
+      ) => string;
+    };
+    expect(seam.externalSourceMapDir).toBeTypeOf("function");
+    if (seam.externalSourceMapDir === undefined) return;
+    expect(
+      seam.externalSourceMapDir("C:\\repo", "D:\\maps\\index.js.map", win32),
+    ).toBe("D:\\maps");
+  });
+});
 
 describe("checkLibrary: 세 축 통합", () => {
   it("세 판정 축을 한 결과로 모은다", async () => {
@@ -143,6 +164,178 @@ describe("checkLibrary: esbuild가 표현할 수 없는 문법 target", () => {
             finding.axis === "dependency" && finding.name === "missing-package",
         ),
       ).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("checkLibrary: BCD가 지원하지 않는 baseline browser", () => {
+  it("mixed baseline의 판정 불가 browser를 runtime-js finding으로 보고하고 지원 browser 검사는 계속한다", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bb-library-bcd-unsupported-"));
+    try {
+      await mkdir(join(dir, "dist"), { recursive: true });
+      await writeFile(
+        join(dir, "package.json"),
+        JSON.stringify({
+          name: "bcd-unsupported-browser-fixture",
+          version: "1.0.0",
+          private: true,
+          browserslist: ["chrome >= 100", "and_qq >= 14.9"],
+          exports: "./dist/index.js",
+        }),
+        "utf8",
+      );
+      await writeFile(
+        join(dir, "dist", "index.js"),
+        [
+          "export function copy(value) {",
+          "  structuredClone(value);",
+          "  return AbortSignal.timeout(1);",
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const result = await checkLibrary({ projectDir: dir, allow: [] });
+
+      expect(result.incomplete).toBe(true);
+      expect(result.ok).toBe(false);
+      expect(result.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            axis: "runtime-js",
+            file: "*",
+            line: null,
+            name: "BB_RUNTIME_BASELINE_UNSUPPORTED",
+            detail: expect.stringContaining("and_qq 14.9"),
+          }),
+          expect.objectContaining({
+            axis: "runtime-js",
+            file: "dist/index.js",
+            name: "AbortSignal.timeout",
+          }),
+        ]),
+      );
+      expect(
+        result.findings.some((finding) => finding.name === "structuredClone"),
+      ).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("checkLibrary: 판정할 수 없는 JavaScript export target", () => {
+  it("valid entry를 계속 검사하면서 root escape·절대·missing target을 모두 incomplete finding으로 보고한다", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bb-library-invalid-exports-"));
+    try {
+      await mkdir(join(dir, "dist"), { recursive: true });
+      await writeFile(
+        join(dir, "package.json"),
+        JSON.stringify({
+          name: "invalid-exports-fixture",
+          version: "1.0.0",
+          private: true,
+          browserslist: ["chrome >= 80"],
+          exports: {
+            ".": "./dist/index.js",
+            "./escape": "../../outside.js",
+            "./absolute": "/tmp/bb-check-absolute.js",
+            "./missing": "./dist/missing.js",
+            "./types": "./dist/index.d.ts",
+            "./style": "./dist/style.css",
+            "./data": "./dist/data.json",
+            "./map": "./dist/index.js.map",
+          },
+        }),
+        "utf8",
+      );
+      await writeFile(
+        join(dir, "dist", "index.js"),
+        "export const copy = (value) => structuredClone(value);\n",
+        "utf8",
+      );
+
+      const result = await checkLibrary({ projectDir: dir, allow: [] });
+
+      expect(result.incomplete).toBe(true);
+      expect(result.ok).toBe(false);
+      expect(
+        result.findings
+          .filter((finding) => finding.name === "BB_TARGET_READ")
+          .map(({ axis, file, line }) => ({ axis, file, line })),
+      ).toEqual([
+        { axis: "syntax", file: "../../outside.js", line: null },
+        { axis: "syntax", file: "./dist/missing.js", line: null },
+        { axis: "syntax", file: "/tmp/bb-check-absolute.js", line: null },
+      ]);
+      expect(
+        result.findings.some(
+          (finding) =>
+            finding.axis === "runtime-js" &&
+            finding.file === "dist/index.js" &&
+            finding.name === "structuredClone",
+        ),
+      ).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("모든 JS target이 판정 불가여도 reject하지 않고 전체를 incomplete finding으로 보고한다", async () => {
+    const dir = await mkdtemp(
+      join(tmpdir(), "bb-library-all-invalid-exports-"),
+    );
+    try {
+      await writeFile(
+        join(dir, "package.json"),
+        JSON.stringify({
+          name: "all-invalid-exports-fixture",
+          version: "1.0.0",
+          private: true,
+          browserslist: ["chrome >= 80"],
+          exports: {
+            "./escape": "../../outside.js",
+            "./absolute": "/tmp/bb-check-absolute.js",
+            "./missing": "./dist/missing.js",
+          },
+        }),
+        "utf8",
+      );
+
+      const result = await checkLibrary({ projectDir: dir, allow: [] });
+
+      expect(result.incomplete).toBe(true);
+      expect(result.ok).toBe(false);
+      expect(
+        result.findings.map(({ axis, file, line, name }) => ({
+          axis,
+          file,
+          line,
+          name,
+        })),
+      ).toEqual([
+        {
+          axis: "syntax",
+          file: "../../outside.js",
+          line: null,
+          name: "BB_TARGET_READ",
+        },
+        {
+          axis: "syntax",
+          file: "./dist/missing.js",
+          line: null,
+          name: "BB_TARGET_READ",
+        },
+        {
+          axis: "syntax",
+          file: "/tmp/bb-check-absolute.js",
+          line: null,
+          name: "BB_TARGET_READ",
+        },
+      ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -292,6 +485,42 @@ describe("checkLibrary: source map 귀속", () => {
     const result = await checkLibrary({ projectDir: tempDir, allow: [] });
     const finding = result.findings.find((f) => f.name === "structuredClone");
     expect(finding?.originalFile).toBe("src/index.ts");
+  });
+
+  // 잡는 생산 결함: external map을 dist/maps에서 읽고도 generated file의
+  // dist를 mapDir로 넘기면 ../src가 src로 해석되어 map 실제 위치를 잃는다.
+  it("중첩 external source map의 실제 디렉터리 기준으로 원본 위치를 귀속한다", async () => {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(join(tempDir, "dist", "maps"), { recursive: true });
+    await writePackageJson(tempDir);
+    await writeFile(
+      join(tempDir, "dist", "index.js"),
+      [
+        "export function makeId() {",
+        "  return structuredClone({});",
+        "}",
+        "//# sourceMappingURL=maps/index.js.map",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      join(tempDir, "dist", "maps", "index.js.map"),
+      JSON.stringify({
+        version: 3,
+        sources: ["../src/input.ts"],
+        sourcesContent: [
+          "export function makeId() {\n  return structuredClone({});\n}\n",
+        ],
+        mappings: "AAAA;AAAA",
+        names: [],
+      }),
+      "utf8",
+    );
+
+    const result = await checkLibrary({ projectDir: tempDir, allow: [] });
+    const finding = result.findings.find((f) => f.name === "structuredClone");
+    expect(finding?.originalFile).toBe("dist/src/input.ts");
   });
 
   it("inline data URL source map도 원본 위치로 귀속한다", async () => {
