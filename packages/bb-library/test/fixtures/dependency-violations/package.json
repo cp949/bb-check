@@ -1,0 +1,12 @@
+{
+  "name": "@fixture/dependency-violations",
+  "version": "1.0.0",
+  "private": true,
+  "exports": "./dist/index.js",
+  "dependencies": {
+    "declared-leaky-dep": "^1.0.0"
+  },
+  "optionalDependencies": {
+    "optional-leaky-dep": "^1.0.0"
+  }
+}

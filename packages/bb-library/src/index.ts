@@ -19,3 +19,9 @@ export type {
   CompatFinding,
   CompatFindingTier,
 } from "./compat-scanner.js";
+export { createDependencyClosureScanner } from "./dependency-closure.js";
+export type {
+  DependencyClosureScanner,
+  DependencyFinding,
+  DependencyFindingKind,
+} from "./dependency-closure.js";
