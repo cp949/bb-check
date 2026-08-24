@@ -1,10 +1,8 @@
 # custom
 _tmp/
 
-# @cp949/bb-check `prepack`(scripts/copy-root-docs.mjs)이 루트 README.md/
-# LICENSE를 매번 새로 복사해 넣는 산출물이다 — 손으로 유지하는 사본이
-# 아니므로 커밋하지 않는다.
-packages/bb-check/README.md
+# @cp949/bb-check `prepack`(scripts/copy-root-license.mjs)이 루트 LICENSE를
+# 매번 새로 복사해 넣는 산출물이다. package README는 package가 직접 소유한다.
 packages/bb-check/LICENSE
 
 # Turborepo

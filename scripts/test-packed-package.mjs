@@ -4,13 +4,14 @@
 // 않는, 진짜 격리된 소비자를 흉내낸다:
 //
 //   1. `npm pack`으로 실제 tgz를 만든다.
-//   2. mkdtemp로 만든 빈 프로젝트에 그 tgz를 `npm install`한다(레지스트리에서
-//      5개 runtime external도 함께 설치됨).
+//   2. mkdtemp로 만든 빈 프로젝트에 그 tgz와 esbuild를 dev dependency로
+//      `npm install`한다(레지스트리에서 5개 runtime external도 함께 설치됨).
 //   3. `node -e 'import(...)'`로 두 공개 entry가 로드되는지 확인한다.
 //   4. 설치된 `bb-check` bin이 shebang·실행 권한을 갖고 동작하는지 확인한다.
-//   5. `library check`를 pass/fail fixture에 대해 실행해 exit code 0/1을
-//      확인한다 — bb-core/bb-library가 제대로 번들되어 있지 않으면 이
-//      단계에서 ERR_MODULE_NOT_FOUND로 드러난다.
+//   5. npm README의 최소 흐름대로 pass/fail source를 esbuild로 빌드한 뒤
+//      `library check`를 실행해 exit code 0/1을 확인한다 — bb-core/
+//      bb-library가 제대로 번들되어 있지 않으면 이 단계에서
+//      ERR_MODULE_NOT_FOUND로 드러난다.
 //
 // 임시 디렉터리는 성공·실패 관계없이 finally에서 제거한다.
 
@@ -72,21 +73,17 @@ const expectNoUnresolvedModule = (label, result) => {
   }
 };
 
-/** package.json + dist/index.js + bb-check.config.mjs로 구성된 최소 project fixture를 만든다. */
-const writeProjectFixture = async (dir, browserslist, distSource) => {
-  await mkdir(join(dir, "dist"), { recursive: true });
+/** 기존 consumer manifest를 보존하며 browserslist와 src/index.js fixture를 쓴다. */
+const writeSourceFixture = async (dir, browserslist, source) => {
+  const manifestPath = join(dir, "package.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  await mkdir(join(dir, "src"), { recursive: true });
   await writeFile(
-    join(dir, "package.json"),
-    JSON.stringify({
-      name: "bb-check-isolated-fixture",
-      version: "1.0.0",
-      private: true,
-      browserslist,
-      exports: "./dist/index.js",
-    }),
+    manifestPath,
+    `${JSON.stringify({ ...manifest, browserslist }, null, 2)}\n`,
     "utf8",
   );
-  await writeFile(join(dir, "dist", "index.js"), distSource, "utf8");
+  await writeFile(join(dir, "src", "index.js"), source, "utf8");
 };
 
 const main = async () => {
@@ -108,21 +105,49 @@ const main = async () => {
     const [{ filename }] = JSON.parse(packResult.stdout);
     const tgzPath = join(packDestDir, filename);
 
-    // 2. 빈 프로젝트를 만들고 그 tgz를 실제로 설치한다(registry에서 5개
-    //    runtime external도 함께 받는다 — workspace symlink를 전혀 거치지 않는다).
+    // 2. README 최소 예제와 같은 source/build/exports 구조의 빈 프로젝트를
+    //    만들고 tgz와 esbuild를 dev dependency로 실제 설치한다. esbuild는
+    //    package가 검증한 고정 버전을 직접 설치해 registry latest 변동을
+    //    release gate에 섞지 않는다. workspace symlink는 전혀 거치지 않는다.
     await writeFile(
       join(consumerDir, "package.json"),
       JSON.stringify(
-        { name: "bb-check-isolated-consumer", version: "0.0.0", private: true },
+        {
+          name: "bb-check-isolated-consumer",
+          version: "0.0.0",
+          private: true,
+          type: "module",
+          exports: "./dist/index.js",
+          scripts: {
+            build:
+              "esbuild src/index.js --bundle --format=esm --target=chrome80 --outfile=dist/index.js",
+          },
+          browserslist: ["Chrome >= 80"],
+        },
         null,
         2,
       ),
       "utf8",
     );
+    const packageManifest = JSON.parse(
+      await readFile(join(packageDir, "package.json"), "utf8"),
+    );
+    const esbuildVersion = packageManifest.dependencies?.esbuild;
+    if (typeof esbuildVersion !== "string" || esbuildVersion.length === 0) {
+      throw new Error("@cp949/bb-check package.json에 esbuild 버전이 없다.");
+    }
     const installResult = run(
       "npm install",
       "npm",
-      ["install", tgzPath, "--no-audit", "--no-fund", "--loglevel=error"],
+      [
+        "install",
+        "--save-dev",
+        tgzPath,
+        `esbuild@${esbuildVersion}`,
+        "--no-audit",
+        "--no-fund",
+        "--loglevel=error",
+      ],
       { cwd: consumerDir, env: forceActualNpmOperationEnv(process.env) },
     );
     expectExitCode("npm install", installResult, 0);
@@ -230,31 +255,38 @@ const main = async () => {
       );
     }
 
-    // 5. pass/fail fixture에 대해 실제 library check를 실행한다.
+    // 5. README의 source -> esbuild build -> library check 흐름을 pass/fail
+    //    fixture 각각에 대해 실행한다. config도 공개 defineConfig entry를
+    //    사용하며, --config/--dir 없이 소비자 프로젝트 루트에서 찾는다.
     await writeFile(
       join(consumerDir, "bb-check.config.mjs"),
-      'export default { library: { projectDir: ".", allow: [] } };\n',
+      [
+        'import { defineConfig } from "@cp949/bb-check";',
+        "",
+        "export default defineConfig({",
+        '  library: { projectDir: ".", allow: [] },',
+        "});",
+        "",
+      ].join("\n"),
       "utf8",
     );
 
-    await writeProjectFixture(
-      join(consumerDir, "fixture-pass"),
-      ["chrome >= 80"],
-      "export const noop = () => {};\n",
+    await writeSourceFixture(
+      consumerDir,
+      ["Chrome >= 80"],
+      "export const add = (left, right) => left + right;\n",
     );
+    const passBuildResult = run(
+      "npm run build (pass fixture)",
+      "npm",
+      ["run", "build"],
+      { cwd: consumerDir },
+    );
+    expectExitCode("npm run build (pass fixture)", passBuildResult, 0);
     const passResult = run(
       "npx bb-check library check (pass fixture)",
       "npx",
-      [
-        "--no-install",
-        "bb-check",
-        "library",
-        "check",
-        "--config",
-        "./bb-check.config.mjs",
-        "--dir",
-        "./fixture-pass",
-      ],
+      ["--no-install", "bb-check", "library", "check"],
       { cwd: consumerDir },
     );
     expectNoUnresolvedModule("library check (pass fixture)", passResult);
@@ -265,9 +297,9 @@ const main = async () => {
       );
     }
 
-    await writeProjectFixture(
-      join(consumerDir, "fixture-fail"),
-      ["chrome >= 50"],
+    await writeSourceFixture(
+      consumerDir,
+      ["Chrome >= 50"],
       [
         "export function greet(person) {",
         '  return person?.name ?? "guest";',
@@ -275,19 +307,17 @@ const main = async () => {
         "",
       ].join("\n"),
     );
+    const failBuildResult = run(
+      "npm run build (fail fixture)",
+      "npm",
+      ["run", "build"],
+      { cwd: consumerDir },
+    );
+    expectExitCode("npm run build (fail fixture)", failBuildResult, 0);
     const failResult = run(
       "npx bb-check library check (fail fixture)",
       "npx",
-      [
-        "--no-install",
-        "bb-check",
-        "library",
-        "check",
-        "--config",
-        "./bb-check.config.mjs",
-        "--dir",
-        "./fixture-fail",
-      ],
+      ["--no-install", "bb-check", "library", "check"],
       { cwd: consumerDir },
     );
     expectNoUnresolvedModule("library check (fail fixture)", failResult);
@@ -297,9 +327,14 @@ const main = async () => {
         `fail fixture 보고서에 "위반"이 없다.\nstdout:\n${failResult.stdout}`,
       );
     }
+    if (!failResult.stdout.includes("syntax-divergence")) {
+      throw new Error(
+        `fail fixture 보고서에 syntax-divergence가 없다.\nstdout:\n${failResult.stdout}`,
+      );
+    }
 
     console.log(
-      "test-packed-package: OK (격리 설치, entry import 2건, bin 실행, pass/fail exit code 모두 확인)",
+      "test-packed-package: OK (격리 설치, entry import 2건, bin 실행, source build 2건, pass/fail exit code 모두 확인)",
     );
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
