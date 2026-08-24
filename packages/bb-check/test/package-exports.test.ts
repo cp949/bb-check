@@ -14,7 +14,7 @@ describe("bb-check 공개 manifest 계약", () => {
   it("공개 entry와 실행 가능한 CLI만 export한다", async () => {
     const manifest = await readJson("packages/bb-check/package.json");
     expect(Object.keys(manifest.exports)).toEqual([".", "./library"]);
-    expect(manifest.bin).toEqual({ "bb-check": "./dist/cli.js" });
+    expect(manifest.bin).toEqual({ "bb-check": "dist/cli.js" });
     expect(manifest.dependencies).not.toHaveProperty("@cp949/bb-core");
     expect(manifest.dependencies).not.toHaveProperty("@cp949/bb-library");
   });

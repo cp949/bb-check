@@ -12,14 +12,21 @@
   },
   "scripts": {
     "build": "turbo run build",
+    "build:release": "turbo run build --force",
     "test": "vitest run --exclude \"scripts/**\"",
+    "test:scripts": "node --test scripts/*.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && turbo run typecheck",
+    "typecheck:release": "tsc -p tsconfig.json --noEmit && turbo run typecheck --force",
     "lint": "eslint tests scripts --no-error-on-unmatched-pattern && turbo run lint",
+    "lint:release": "eslint tests scripts --no-error-on-unmatched-pattern && turbo run lint --force",
     "format:check": "prettier --check .",
     "check-package-files": "node scripts/check-package-files.mjs",
     "test-packed-package": "node scripts/test-packed-package.mjs",
     "check-public-words": "node scripts/check-public-words.mjs",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm test && npm run check-package-files && npm run test-packed-package"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm test && npm run check-package-files && npm run test-packed-package",
+    "verify:package-release": "npm run format:check && npm run lint:release && npm run typecheck:release && npm run build:release && npm test && npm run check-package-files && npm run test-packed-package",
+    "verify:release": "npm run verify:package-release && npm run test:scripts",
+    "publish:npm": "node scripts/publish-package.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

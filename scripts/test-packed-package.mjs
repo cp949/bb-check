@@ -23,7 +23,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
@@ -32,6 +32,12 @@ import { spawnSync } from "node:child_process";
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageDir = join(repoRoot, "packages", "bb-check");
 const useShell = process.platform === "win32";
+
+/** 상위 npm publish --dry-run 설정을 내부 pack/install에 전파하지 않는다. */
+export const forceActualNpmOperationEnv = (env) => ({
+  ...env,
+  npm_config_dry_run: "false",
+});
 
 /** 실패 시 stdout/stderr을 포함한 진단 메시지로 던진다. */
 const run = (label, command, args, options) => {
@@ -96,7 +102,7 @@ const main = async () => {
       "npm pack",
       "npm",
       ["pack", "--json", "--pack-destination", packDestDir],
-      { cwd: packageDir },
+      { cwd: packageDir, env: forceActualNpmOperationEnv(process.env) },
     );
     expectExitCode("npm pack", packResult, 0);
     const [{ filename }] = JSON.parse(packResult.stdout);
@@ -117,7 +123,7 @@ const main = async () => {
       "npm install",
       "npm",
       ["install", tgzPath, "--no-audit", "--no-fund", "--loglevel=error"],
-      { cwd: consumerDir },
+      { cwd: consumerDir, env: forceActualNpmOperationEnv(process.env) },
     );
     expectExitCode("npm install", installResult, 0);
 
@@ -300,10 +306,12 @@ const main = async () => {
   }
 };
 
-main().catch((cause) => {
-  console.error("test-packed-package: FAIL\n");
-  console.error(
-    cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
-  );
-  process.exitCode = 1;
-});
+if (resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((cause) => {
+    console.error("test-packed-package: FAIL\n");
+    console.error(
+      cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
+    );
+    process.exitCode = 1;
+  });
+}
