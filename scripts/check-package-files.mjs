@@ -8,9 +8,10 @@
 //    .js와 .d.ts)이 실제로 그 목록에 있는가 — `files` allowlist는 "이 이름이
 //    나오면 허용"일 뿐 "반드시 나와야 한다"는 보장이 아니다(예: 두 파일이
 //    package 디렉터리에서 사라지면 `npm pack`은 조용히 그냥 빠뜨린다).
-//    README.md/LICENSE는 `prepack`(scripts/copy-root-docs.mjs)이 저장소
-//    루트에서 복사해 넣는데, 그 step이 조용히 실패하거나 생략되는 회귀를
-//    여기서 잡는다. dist/*.js와 dist/*.d.ts는 build가 아예 안 됐거나
+//    README.md는 package가 직접 소유하고, LICENSE는
+//    `prepack`(scripts/copy-root-license.mjs)이 저장소 루트에서 복사한다.
+//    LICENSE 최신화 step이 조용히 실패하거나 생략되는 회귀를 여기서 잡는다.
+//    dist/*.js와 dist/*.d.ts는 build가 아예 안 됐거나
 //    (dist/가 없거나) 오래된 상태로 남아 있는 회귀(예: C1 — test가 build보다
 //    먼저 돌아 실제로는 한 번도 검증되지 않은 dist/를 그대로 pack하는 사고)를
 //    여기서 잡는다 — `files`의 "dist/**"는 존재 여부를 전혀 강제하지

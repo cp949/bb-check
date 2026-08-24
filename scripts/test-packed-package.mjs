@@ -172,10 +172,10 @@ const main = async () => {
       );
     }
 
-    // README.md/LICENSE도 실제로 설치됐는지 확인한다(`prepack`이 저장소
-    // 루트에서 복사해 넣는 파일 — check-package-files.mjs가 tarball
-    // manifest 수준에서 이미 검사하지만, 여기서는 실제 설치 결과로도
-    // 다시 확인한다).
+    // README.md/LICENSE도 실제로 설치됐는지 확인한다(README는 package가
+    // 소유하고 LICENSE는 `prepack`이 저장소 루트에서 복사한다 —
+    // check-package-files.mjs가 tarball manifest 수준에서 이미 검사하지만,
+    // 여기서는 실제 설치 결과로도 다시 확인한다).
     const installedPackageDir = join(
       consumerDir,
       "node_modules",

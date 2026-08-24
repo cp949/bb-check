@@ -56,6 +56,13 @@ describe("bb-check 공개 manifest 계약", () => {
     ]);
   });
 
+  it("prepack은 package README를 보존하는 root LICENSE 복사 script만 실행한다", async () => {
+    const manifest = await readJson("packages/bb-check/package.json");
+    expect(manifest.scripts.prepack).toBe(
+      "node ../../scripts/copy-root-license.mjs",
+    );
+  });
+
   it("publishConfig.access는 public이다", async () => {
     const manifest = await readJson("packages/bb-check/package.json");
     expect(manifest.publishConfig).toMatchObject({ access: "public" });

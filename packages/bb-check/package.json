@@ -25,7 +25,7 @@
   },
   "scripts": {
     "build": "vite build && rollup -c rollup.dts.config.mjs",
-    "prepack": "node ../../scripts/copy-root-docs.mjs",
+    "prepack": "node ../../scripts/copy-root-license.mjs",
     "prepublishOnly": "npm --prefix ../.. run verify:package-release",
     "typecheck": "node ../../scripts/run-if-src.mjs tsc -p tsconfig.typecheck.json",
     "test": "vitest run --passWithNoTests",
