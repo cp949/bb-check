@@ -32,19 +32,20 @@ jobs:
           npx prettier --check
           .github/workflows/ci.yml .prettierrc.json eslint.config.js
           README.md package.json tsconfig.base.json tsconfig.json turbo.json
-          tests/npm-command.ts tests/npm-command.test.ts
+          tests
           scripts
           packages/next-webpack-baseline
           apps/next-pages-fixture
 
       - name: lint root, active workspaces, and release scripts
         run: |
-          npx eslint tests/npm-command.ts tests/npm-command.test.ts scripts --no-error-on-unmatched-pattern
+          npx eslint tests scripts --no-error-on-unmatched-pattern
           npm run lint --workspace=@cp949/next-webpack-baseline
           npm run lint --workspace=next-pages-fixture
 
-      - name: typecheck active workspaces
+      - name: typecheck root and active workspaces
         run: |
+          npx tsc -p tsconfig.json --noEmit
           npm run typecheck --workspace=@cp949/next-webpack-baseline
           npm run typecheck --workspace=next-pages-fixture
 
@@ -55,7 +56,7 @@ jobs:
 
       - name: root and active package tests
         run: |
-          npx vitest run tests/npm-command.test.ts
+          npx vitest run tests --no-file-parallelism
           npm test --workspace=@cp949/next-webpack-baseline
 
       - name: release script tests

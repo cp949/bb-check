@@ -49,7 +49,7 @@ guard가 차단하며, direct `npm publish --dry-run`은 허용한다. 금지어
 포함된 파일 경로는 로그에 출력하지 않는다. CI는 publish, registry credential,
 secret release scan을 실행하지 않는다.
 
-Codiny pilot과 두 번째 소비자 pilot은 이 저장소 변경과 분리된 human gate다.
+consumer application pilot과 두 번째 소비자 pilot은 이 저장소 변경과 분리된 human gate다.
 두 번째 소비자 경로와 release 금지어 목록이 제공되기 전에는 실행하지 않는다.
 
 ## 보안

@@ -62,6 +62,53 @@ describe("normalizeConfig", () => {
     );
   });
 
+  it.each([
+    {
+      name: "non-enumerable string key",
+      createInput: () => {
+        const input = { projectDir, policy: [] };
+        Object.defineProperty(input, "hidden-key-sentinel", {
+          enumerable: false,
+          value: "hidden-value-sentinel",
+        });
+        return input;
+      },
+    },
+    {
+      name: "symbol accessor key",
+      createInput: () => {
+        const input = { projectDir, policy: [] };
+        Object.defineProperty(input, Symbol("symbol-key-sentinel"), {
+          get: () => {
+            throw new Error("symbol-getter-sentinel");
+          },
+        });
+        return input;
+      },
+    },
+  ])(
+    "알 수 없는 $name를 실행하거나 노출하지 않고 거부한다",
+    ({ createInput }) => {
+      let caught: unknown;
+      try {
+        normalizeConfig(createInput());
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toEqual(
+        expect.objectContaining<Partial<NextWebpackBaselineError>>({
+          code: "NWB_CONFIG_INVALID",
+        }),
+      );
+      expect(caught).toBeInstanceOf(Error);
+      if (!(caught instanceof Error)) return;
+      expect(caught.message).not.toContain("key-sentinel");
+      expect(caught.message).not.toContain("value-sentinel");
+      expect(caught.message).not.toContain("getter-sentinel");
+    },
+  );
+
   it("trim 후 빈 policy reason을 NWB_CONFIG_INVALID로 거부한다", () => {
     expect(() =>
       normalizeConfig({

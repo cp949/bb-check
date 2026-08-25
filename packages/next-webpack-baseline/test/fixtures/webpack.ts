@@ -41,6 +41,8 @@ export interface WebpackModuleDefinition {
   readonly sourceFailure?:
     "missing-original-source" | "original-source-throws" | "source-throws";
   readonly resourceShape?: "getter-throws";
+  readonly conditionNameShape?:
+    "missing" | "getter-throws" | "call-throws" | "non-string";
   readonly typeShape?: "getter-throws";
   readonly children?: readonly WebpackModuleDefinition[];
   readonly nestedModulesShape?:
@@ -57,6 +59,7 @@ export interface WebpackModuleDefinition {
 
 export interface ObservedWebpackModule {
   readonly resource?: unknown;
+  readonly nameForCondition?: unknown;
   readonly type: string;
   readonly beforeLoadersSource?: string;
   readonly originalSource?: () => {
@@ -142,6 +145,19 @@ export const createWebpackFixture = ({
         ? {}
         : { beforeLoadersSource: definition.beforeLoadersSource }),
       type: "javascript/auto",
+      ...(definition.conditionNameShape === "missing"
+        ? {}
+        : {
+            nameForCondition: () => {
+              if (definition.conditionNameShape === "call-throws") {
+                throw new Error("fixture condition name call sentinel");
+              }
+              if (definition.conditionNameShape === "non-string") return 42;
+              return typeof definition.resource === "string"
+                ? definition.resource.split("?", 1)[0]
+                : null;
+            },
+          }),
       ...(definition.sourceFailure === "missing-original-source"
         ? {}
         : {
@@ -170,6 +186,13 @@ export const createWebpackFixture = ({
       Object.defineProperty(module, "resource", {
         get() {
           throw new Error("fixture resource getter sentinel");
+        },
+      });
+    }
+    if (definition.conditionNameShape === "getter-throws") {
+      Object.defineProperty(module, "nameForCondition", {
+        get() {
+          throw new Error("fixture condition name getter sentinel");
         },
       });
     }

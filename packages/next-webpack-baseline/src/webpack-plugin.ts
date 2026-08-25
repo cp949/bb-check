@@ -37,6 +37,7 @@ interface AfterSealHook {
 
 interface WebpackModule {
   readonly resource?: unknown;
+  readonly nameForCondition?: unknown;
   readonly type?: unknown;
   readonly modules?: unknown;
   readonly originalSource?: unknown;
@@ -313,6 +314,28 @@ const loaderSourceOf = (module: WebpackModule): LoaderSourceResult => {
   }
 };
 
+const conditionResourceOf = (module: WebpackModule): string => {
+  const nameForCondition = withinWebpackBoundary(
+    "public module condition resource API를 읽을 수 없습니다.",
+    () => module.nameForCondition,
+  );
+  if (typeof nameForCondition !== "function") {
+    return unsupportedWebpack(
+      "public module condition resource API를 사용할 수 없습니다.",
+    );
+  }
+  const resource = withinWebpackBoundary(
+    "module condition resource를 읽을 수 없습니다.",
+    () => nameForCondition.call(module),
+  );
+  if (typeof resource !== "string" || resource === "") {
+    return unsupportedWebpack(
+      "module condition resource를 사용할 수 없습니다.",
+    );
+  }
+  return resource;
+};
+
 const parentsOf = (group: unknown): readonly unknown[] => {
   if (!isObject(group)) {
     return unsupportedWebpack(
@@ -480,9 +503,10 @@ const inspectCompilation = (
       if (typeof type !== "string" || !type.startsWith("javascript/")) {
         continue;
       }
+      const conditionResource = conditionResourceOf(unit);
       const eligibility = createVerdict({
         config: input.config,
-        resource,
+        resource: conditionResource,
         syntax: { diagnostics: [] },
         isClientEntryReachable,
       });
@@ -509,13 +533,13 @@ const inspectCompilation = (
       const source = loaded.source;
 
       const hash = contentHash(source);
-      const analysisKey = `${cacheNamespace}\u0000${resource}\u0000${hash}`;
+      const analysisKey = `${cacheNamespace}\u0000${conditionResource}\u0000${hash}`;
       if (analyzed.has(analysisKey)) continue;
       analyzed.add(analysisKey);
 
       const verdict = createVerdict({
         config: input.config,
-        resource,
+        resource: conditionResource,
         syntax: analyzeSyntax(source, input.baseline),
         isClientEntryReachable,
       });

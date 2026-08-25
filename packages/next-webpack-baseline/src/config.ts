@@ -63,9 +63,9 @@ const assertOnlyKeys = (
   allowed: readonly string[],
   label: string,
 ): void => {
-  for (const key of Object.keys(value)) {
-    if (!allowed.includes(key))
-      invalid(`${label}에 알 수 없는 키 ${key}가 있습니다.`);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || !allowed.includes(key))
+      invalid(`${label}에 알 수 없는 키가 있습니다.`);
   }
 };
 

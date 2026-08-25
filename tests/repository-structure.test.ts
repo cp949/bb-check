@@ -37,4 +37,19 @@ describe("workspace 공개 경계", () => {
       'vitest run --exclude "scripts/**" --no-file-parallelism',
     );
   });
+
+  it("hosted Node 22 full gate는 전체 root 정적 검사와 테스트를 실행한다", async () => {
+    const workflow = await readFile(".github/workflows/ci.yml", "utf8");
+
+    expect(workflow).toContain("          tests\n");
+    expect(workflow).toContain("npx eslint tests scripts");
+    expect(workflow).toContain("npx tsc -p tsconfig.json --noEmit");
+    expect(workflow).toContain("npx vitest run tests --no-file-parallelism");
+  });
+
+  it("root README는 내부 소비자 식별자를 공개하지 않는다", async () => {
+    const readme = await readFile("README.md", "utf8");
+
+    expect(readme).not.toMatch(/\bcodiny\b/iu);
+  });
 });

@@ -131,6 +131,60 @@ describe("createWebpackPlugin", () => {
     ]);
   });
 
+  it("query가 있는 resource도 query-free entrypoint의 exact waiver를 적용한다", () => {
+    const waivedConfig: NormalizedConfig = {
+      ...config,
+      waiversByPackage: new Map([
+        [
+          "legacy-widget",
+          [
+            {
+              package: "legacy-widget",
+              reason: "query-free waiver",
+              allowedEntrypoints: ["dist/query.js"],
+            },
+          ],
+        ],
+      ]),
+    };
+    const fixture = createWebpackFixture({
+      modules: [
+        pageModule(
+          "dist/query.js?raw",
+          "const value = input?.value ?? fallback;",
+        ),
+      ],
+    });
+    createWebpackPlugin(
+      { config: waivedConfig, baseline: baselineFor() },
+      { dev: false },
+    ).apply(fixture.compiler);
+
+    expect(errorRecords(fixture.run())).toEqual([]);
+    expect(fixture.compilation.warnings.map(({ message }) => message)).toEqual([
+      "waiver applied: legacy-widget/dist/query.js",
+    ]);
+  });
+
+  it("resource query 내부의 가짜 node_modules 경계를 package 판정에서 제외한다", () => {
+    const { errors } = runPlugin({
+      definitions: [
+        pageModule(
+          "dist/query.js?source=/fake/node_modules/unlisted-widget/dist/index.js",
+          "const value = input?.value;",
+        ),
+      ],
+    });
+
+    expect(errorRecords(errors)).toEqual([
+      {
+        code: "NWB_SYNTAX_UNSUPPORTED",
+        message:
+          "[NWB_SYNTAX_UNSUPPORTED] legacy-widget/dist/query.js: optional-chaining 구문은 설정된 browser baseline에서 지원되지 않습니다.",
+      },
+    ]);
+  });
+
   it("chunkGraph가 afterSeal 직전에 준비되는 Webpack lifecycle을 지원한다", () => {
     const fixture = createWebpackFixture({
       chunkGraphTiming: "after-seal",
@@ -334,12 +388,26 @@ describe("createWebpackPlugin", () => {
       entrypointsShape: "primitive-result",
     },
     { name: "module resource getter 예외", resourceShape: "getter-throws" },
+    { name: "condition name method 부재", conditionNameShape: "missing" },
+    {
+      name: "condition name method getter 예외",
+      conditionNameShape: "getter-throws",
+    },
+    {
+      name: "condition name method 호출 예외",
+      conditionNameShape: "call-throws",
+    },
+    {
+      name: "condition name method의 비문자열 반환값",
+      conditionNameShape: "non-string",
+    },
     { name: "module type getter 예외", typeShape: "getter-throws" },
   ] satisfies ReadonlyArray<{
     name: string;
     groupShape?: "name-getter-throws";
     entrypointsShape?: "get-throws" | "primitive-result";
     resourceShape?: "getter-throws";
+    conditionNameShape?: WebpackModuleDefinition["conditionNameShape"];
     typeShape?: "getter-throws";
   }>)("$name도 sentinel을 노출하지 않고 fail-closed 한다", (shape) => {
     const fixture = createWebpackFixture({
@@ -352,6 +420,9 @@ describe("createWebpackPlugin", () => {
           ...(shape.resourceShape === undefined
             ? {}
             : { resourceShape: shape.resourceShape }),
+          ...(shape.conditionNameShape === undefined
+            ? {}
+            : { conditionNameShape: shape.conditionNameShape }),
           ...(shape.typeShape === undefined
             ? {}
             : { typeShape: shape.typeShape }),
