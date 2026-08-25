@@ -319,7 +319,16 @@ const parentsOf = (group: unknown): readonly unknown[] => {
     if (!isIterable(parents)) {
       return unsupportedWebpack("chunk group parents를 순회할 수 없습니다.");
     }
-    return [...parents];
+    const snapshot: Record<PropertyKey, unknown>[] = [];
+    for (const parent of parents) {
+      if (!isObject(parent)) {
+        return unsupportedWebpack(
+          "chunk group parent 형상을 지원할 수 없습니다.",
+        );
+      }
+      snapshot.push(parent);
+    }
+    return snapshot;
   } catch (cause) {
     if (cause instanceof NextWebpackBaselineError) throw cause;
     return unsupportedWebpack("chunk group parents를 읽을 수 없습니다.");
@@ -335,7 +344,14 @@ const groupsOf = (chunk: unknown): readonly unknown[] => {
     if (!isIterable(groups)) {
       return unsupportedWebpack("public chunk groups를 순회할 수 없습니다.");
     }
-    return [...groups];
+    const snapshot: Record<PropertyKey, unknown>[] = [];
+    for (const group of groups) {
+      if (!isObject(group)) {
+        return unsupportedWebpack("chunk group 형상을 지원할 수 없습니다.");
+      }
+      snapshot.push(group);
+    }
+    return snapshot;
   } catch (cause) {
     if (cause instanceof NextWebpackBaselineError) throw cause;
     return unsupportedWebpack("public chunk groups를 읽을 수 없습니다.");
@@ -374,15 +390,20 @@ const isPagesClientReachable = (
       "chunk group name을 읽을 수 없습니다.",
       () => group.name,
     );
-    const isEntrypoint =
-      typeof name === "string" &&
-      withinWebpackBoundary(
+    if (typeof name === "string") {
+      const entrypoint = withinWebpackBoundary(
         "public entrypoints를 읽을 수 없습니다.",
-        () => entrypoints.get(name) === group,
+        () => entrypoints.get(name),
       );
-    if (isEntrypoint) {
-      if (name.startsWith("pages/")) return true;
-      continue;
+      if (entrypoint !== undefined && !isObject(entrypoint)) {
+        return unsupportedWebpack(
+          "public entrypoint 형상을 지원할 수 없습니다.",
+        );
+      }
+      if (entrypoint === group) {
+        if (name.startsWith("pages/")) return true;
+        continue;
+      }
     }
     queue.push(...parentsOf(group));
   }

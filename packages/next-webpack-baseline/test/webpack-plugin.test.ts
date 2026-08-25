@@ -223,10 +223,18 @@ describe("createWebpackPlugin", () => {
     },
     { name: "chunk group iterable 부재", groupShape: "missing-groups" },
     {
+      name: "chunk group iterable의 원시 원소",
+      groupShape: "primitive-group-element",
+    },
+    {
       name: "chunk group iterable getter 예외",
       groupShape: "groups-getter-throws",
     },
     { name: "chunk group parent API 부재", groupShape: "missing-parents" },
+    {
+      name: "chunk group parents iterable의 원시 원소",
+      groupShape: "primitive-parent-element",
+    },
     {
       name: "chunk group parent API getter 예외",
       groupShape: "parents-getter-throws",
@@ -237,6 +245,8 @@ describe("createWebpackPlugin", () => {
     groupShape?:
       | "missing-groups"
       | "missing-parents"
+      | "primitive-group-element"
+      | "primitive-parent-element"
       | "groups-getter-throws"
       | "parents-getter-throws";
   }>)("$name은 NWB_WEBPACK_UNSUPPORTED로 fail-closed 한다", (shape) => {
@@ -264,12 +274,16 @@ describe("createWebpackPlugin", () => {
   it.each([
     { name: "chunk group name getter 예외", groupShape: "name-getter-throws" },
     { name: "entrypoints get 호출 예외", entrypointsShape: "get-throws" },
+    {
+      name: "entrypoints get의 원시 반환값",
+      entrypointsShape: "primitive-result",
+    },
     { name: "module resource getter 예외", resourceShape: "getter-throws" },
     { name: "module type getter 예외", typeShape: "getter-throws" },
   ] satisfies ReadonlyArray<{
     name: string;
     groupShape?: "name-getter-throws";
-    entrypointsShape?: "get-throws";
+    entrypointsShape?: "get-throws" | "primitive-result";
     resourceShape?: "getter-throws";
     typeShape?: "getter-throws";
   }>)("$name도 sentinel을 노출하지 않고 fail-closed 한다", (shape) => {

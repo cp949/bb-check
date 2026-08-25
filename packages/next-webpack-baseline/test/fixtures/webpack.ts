@@ -48,6 +48,8 @@ export interface WebpackModuleDefinition {
   readonly groupShape?:
     | "missing-groups"
     | "missing-parents"
+    | "primitive-group-element"
+    | "primitive-parent-element"
     | "groups-getter-throws"
     | "parents-getter-throws"
     | "name-getter-throws";
@@ -78,7 +80,7 @@ interface WebpackChunkGraphDouble {
 }
 
 interface WebpackEntrypointsDouble {
-  readonly get: (name: string) => ChunkGroup | undefined;
+  readonly get: (name: string) => unknown;
 }
 
 export interface WebpackCompilationDouble {
@@ -115,7 +117,7 @@ export const createWebpackFixture = ({
   readonly chunkGraphTiming?: "compilation" | "after-seal";
   readonly moduleChunksShape?:
     "iterable" | "non-iterable" | "method-getter-throws";
-  readonly entrypointsShape?: "map" | "get-throws";
+  readonly entrypointsShape?: "map" | "get-throws" | "primitive-result";
 }): WebpackFixture => {
   const entrypoints = new Map<string, ChunkGroup>();
   for (const definition of definitions) {
@@ -219,7 +221,8 @@ export const createWebpackFixture = ({
       });
     } else if (definition.groupShape !== "missing-parents") {
       Object.defineProperty(moduleGroup, "getParents", {
-        value: () => parents,
+        value: () =>
+          definition.groupShape === "primitive-parent-element" ? [42] : parents,
       });
     }
     if (definition.groupShape === "name-getter-throws") {
@@ -239,7 +242,12 @@ export const createWebpackFixture = ({
       });
     } else if (definition.groupShape !== "missing-groups") {
       Object.defineProperty(chunk, "groupsIterable", {
-        value: definition.entrypoints.length === 0 ? [] : [moduleGroup],
+        value:
+          definition.entrypoints.length === 0
+            ? []
+            : definition.groupShape === "primitive-group-element"
+              ? [42]
+              : [moduleGroup],
       });
     }
     chunksByModule.set(module, [chunk]);
@@ -264,14 +272,16 @@ export const createWebpackFixture = ({
   }
   let activeChunkGraph =
     chunkGraphTiming === "compilation" ? chunkGraph : undefined;
-  const exposedEntrypoints: WebpackEntrypointsDouble =
-    entrypointsShape === "get-throws"
-      ? {
-          get() {
-            throw new Error("fixture entrypoints get sentinel");
-          },
-        }
-      : entrypoints;
+  let exposedEntrypoints: WebpackEntrypointsDouble = entrypoints;
+  if (entrypointsShape === "get-throws") {
+    exposedEntrypoints = {
+      get() {
+        throw new Error("fixture entrypoints get sentinel");
+      },
+    };
+  } else if (entrypointsShape === "primitive-result") {
+    exposedEntrypoints = { get: () => 42 };
+  }
   const compilation: WebpackCompilationDouble = {
     modules,
     get chunkGraph() {
