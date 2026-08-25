@@ -58,6 +58,23 @@ const errorRecords = (errors: readonly Error[]) =>
     message: error.message,
   }));
 
+const expectStableWebpackShapeError = (operation: () => unknown): void => {
+  let caught: unknown;
+  try {
+    operation();
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toEqual(
+    expect.objectContaining({ code: "NWB_WEBPACK_UNSUPPORTED" }),
+  );
+  expect(caught).toBeInstanceOf(Error);
+  if (!(caught instanceof Error)) return;
+  expect(caught.message).not.toContain("fixture");
+  expect(caught.message).not.toContain("sentinel");
+};
+
 describe("createWebpackPlugin", () => {
   it("chunkGraph가 afterSeal 직전에 준비되는 Webpack lifecycle을 지원한다", () => {
     const fixture = createWebpackFixture({
@@ -200,12 +217,28 @@ describe("createWebpackPlugin", () => {
 
   it.each([
     { name: "module chunk iterable 부재", moduleChunksShape: "non-iterable" },
+    {
+      name: "module chunk API getter 예외",
+      moduleChunksShape: "method-getter-throws",
+    },
     { name: "chunk group iterable 부재", groupShape: "missing-groups" },
+    {
+      name: "chunk group iterable getter 예외",
+      groupShape: "groups-getter-throws",
+    },
     { name: "chunk group parent API 부재", groupShape: "missing-parents" },
+    {
+      name: "chunk group parent API getter 예외",
+      groupShape: "parents-getter-throws",
+    },
   ] satisfies ReadonlyArray<{
     name: string;
-    moduleChunksShape?: "non-iterable";
-    groupShape?: "missing-groups" | "missing-parents";
+    moduleChunksShape?: "non-iterable" | "method-getter-throws";
+    groupShape?:
+      | "missing-groups"
+      | "missing-parents"
+      | "groups-getter-throws"
+      | "parents-getter-throws";
   }>)("$name은 NWB_WEBPACK_UNSUPPORTED로 fail-closed 한다", (shape) => {
     const fixture = createWebpackFixture({
       modules: [
@@ -225,9 +258,7 @@ describe("createWebpackPlugin", () => {
       { dev: false },
     ).apply(fixture.compiler);
 
-    expect(() => fixture.run()).toThrow(
-      expect.objectContaining({ code: "NWB_WEBPACK_UNSUPPORTED" }),
-    );
+    expectStableWebpackShapeError(() => fixture.run());
   });
 
   it("iterable inner modules를 가진 합성 module은 각 loader source를 검사한다", () => {
@@ -255,7 +286,7 @@ describe("createWebpackPlugin", () => {
     ]);
   });
 
-  it.each(["non-iterable", "throws"] as const)(
+  it.each(["non-iterable", "throws", "iterator-getter-throws"] as const)(
     "inner module container가 %s이면 조용히 제외하지 않는다",
     (nestedModulesShape) => {
       const fixture = createWebpackFixture({
@@ -272,9 +303,7 @@ describe("createWebpackPlugin", () => {
         { dev: false },
       ).apply(fixture.compiler);
 
-      expect(() => fixture.run()).toThrow(
-        expect.objectContaining({ code: "NWB_WEBPACK_UNSUPPORTED" }),
-      );
+      expectStableWebpackShapeError(() => fixture.run());
     },
   );
 

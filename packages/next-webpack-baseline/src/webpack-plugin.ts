@@ -66,9 +66,6 @@ interface PendingError {
 const isObject = (value: unknown): value is Record<PropertyKey, unknown> =>
   typeof value === "object" && value !== null;
 
-const isIterable = (value: unknown): value is Iterable<unknown> =>
-  isObject(value) && typeof value[Symbol.iterator] === "function";
-
 const unsupportedWebpack = (message: string): never => {
   throw new NextWebpackBaselineError(
     NEXT_WEBPACK_BASELINE_ERROR_CODES.WEBPACK_UNSUPPORTED,
@@ -76,27 +73,52 @@ const unsupportedWebpack = (message: string): never => {
   );
 };
 
+const isIterable = (value: unknown): value is Iterable<unknown> => {
+  if (!isObject(value)) return false;
+  try {
+    return typeof value[Symbol.iterator] === "function";
+  } catch {
+    return false;
+  }
+};
+
 const readCompilationHook = (compiler: unknown): CompilationHook => {
-  if (!isObject(compiler) || !isObject(compiler.hooks)) {
+  if (!isObject(compiler)) {
     return unsupportedWebpack("compiler hooks를 사용할 수 없습니다.");
   }
-  const hook = compiler.hooks.compilation;
-  if (!isObject(hook) || typeof hook.tap !== "function") {
-    return unsupportedWebpack("public compilation hook을 사용할 수 없습니다.");
+  try {
+    const hooks = compiler.hooks;
+    if (!isObject(hooks)) {
+      return unsupportedWebpack("compiler hooks를 사용할 수 없습니다.");
+    }
+    const hook = hooks.compilation;
+    if (!isObject(hook) || typeof hook.tap !== "function") {
+      return unsupportedWebpack(
+        "public compilation hook을 사용할 수 없습니다.",
+      );
+    }
+    return hook as unknown as CompilationHook;
+  } catch (cause) {
+    if (cause instanceof NextWebpackBaselineError) throw cause;
+    return unsupportedWebpack("compiler hooks를 읽을 수 없습니다.");
   }
-  return hook as unknown as CompilationHook;
 };
 
 const readAfterSealHook = (compilation: unknown): AfterSealHook => {
-  if (
-    !isObject(compilation) ||
-    !isObject(compilation.hooks) ||
-    !isObject(compilation.hooks.afterSeal) ||
-    typeof compilation.hooks.afterSeal.tap !== "function"
-  ) {
+  if (!isObject(compilation)) {
     return unsupportedWebpack("public afterSeal hook을 사용할 수 없습니다.");
   }
-  return compilation.hooks.afterSeal as unknown as AfterSealHook;
+  try {
+    const hooks = compilation.hooks;
+    const afterSeal = isObject(hooks) ? hooks.afterSeal : undefined;
+    if (!isObject(afterSeal) || typeof afterSeal.tap !== "function") {
+      return unsupportedWebpack("public afterSeal hook을 사용할 수 없습니다.");
+    }
+    return afterSeal as unknown as AfterSealHook;
+  } catch (cause) {
+    if (cause instanceof NextWebpackBaselineError) throw cause;
+    return unsupportedWebpack("public afterSeal hook을 읽을 수 없습니다.");
+  }
 };
 
 const targetValues = (target: unknown): readonly string[] => {
@@ -107,57 +129,100 @@ const targetValues = (target: unknown): readonly string[] => {
 
 /** Next가 Webpack의 public config에 지정한 client/server 단서를 사용한다. */
 const isClientCompiler = (compiler: unknown): boolean => {
-  if (!isObject(compiler) || !isObject(compiler.options)) {
+  if (!isObject(compiler)) {
     return unsupportedWebpack("compiler options를 사용할 수 없습니다.");
   }
+  try {
+    const options = compiler.options;
+    if (!isObject(options)) {
+      return unsupportedWebpack("compiler options를 사용할 수 없습니다.");
+    }
 
-  const name = compiler.options.name;
-  if (name === "client") return true;
-  if (name === "server" || name === "edge-server") return false;
+    const name = options.name;
+    if (name === "client") return true;
+    if (name === "server" || name === "edge-server") return false;
 
-  const externalsPresets = compiler.options.externalsPresets;
-  if (isObject(externalsPresets) && externalsPresets.node === true)
-    return false;
+    const externalsPresets = options.externalsPresets;
+    if (isObject(externalsPresets) && externalsPresets.node === true)
+      return false;
 
-  const targets = targetValues(compiler.options.target);
-  if (targets.some((target) => target.includes("node"))) return false;
-  if (targets.some((target) => target === "web")) return true;
+    const targets = targetValues(options.target);
+    if (targets.some((target) => target.includes("node"))) return false;
+    if (targets.some((target) => target === "web")) return true;
 
-  return unsupportedWebpack(
-    "client Webpack compilation인지 public config로 확인할 수 없습니다.",
-  );
+    return unsupportedWebpack(
+      "client Webpack compilation인지 public config로 확인할 수 없습니다.",
+    );
+  } catch (cause) {
+    if (cause instanceof NextWebpackBaselineError) throw cause;
+    return unsupportedWebpack("compiler options를 읽을 수 없습니다.");
+  }
 };
 
 const readCompilation = (value: unknown): WebpackCompilation => {
   if (!isObject(value)) {
     return unsupportedWebpack("compilation 객체를 사용할 수 없습니다.");
   }
-  if (!isIterable(value.modules)) {
-    return unsupportedWebpack("compilation modules를 순회할 수 없습니다.");
+  try {
+    const modules = value.modules;
+    if (!isIterable(modules)) {
+      return unsupportedWebpack("compilation modules를 순회할 수 없습니다.");
+    }
+    const moduleSnapshot: WebpackModule[] = [];
+    for (const module of modules) {
+      if (!isObject(module)) {
+        return unsupportedWebpack(
+          "compilation module 형상을 지원할 수 없습니다.",
+        );
+      }
+      moduleSnapshot.push(module);
+    }
+
+    const chunkGraph = value.chunkGraph;
+    const getModuleChunks = isObject(chunkGraph)
+      ? chunkGraph.getModuleChunks
+      : undefined;
+    if (!isObject(chunkGraph) || typeof getModuleChunks !== "function") {
+      return unsupportedWebpack("public chunk graph를 사용할 수 없습니다.");
+    }
+
+    const entrypoints = value.entrypoints;
+    const getEntrypoint = isObject(entrypoints) ? entrypoints.get : undefined;
+    if (!isObject(entrypoints) || typeof getEntrypoint !== "function") {
+      return unsupportedWebpack("public entrypoints를 사용할 수 없습니다.");
+    }
+
+    const hooks = value.hooks;
+    const afterSeal = isObject(hooks) ? hooks.afterSeal : undefined;
+    const tapAfterSeal = isObject(afterSeal) ? afterSeal.tap : undefined;
+    if (!isObject(afterSeal) || typeof tapAfterSeal !== "function") {
+      return unsupportedWebpack("public afterSeal hook을 사용할 수 없습니다.");
+    }
+
+    const errors = value.errors;
+    if (!Array.isArray(errors)) {
+      return unsupportedWebpack("compilation errors를 사용할 수 없습니다.");
+    }
+
+    return {
+      modules: moduleSnapshot,
+      chunkGraph: {
+        getModuleChunks: (module) => getModuleChunks.call(chunkGraph, module),
+      },
+      entrypoints: {
+        get: (name) => getEntrypoint.call(entrypoints, name),
+      },
+      hooks: {
+        afterSeal: {
+          tap: (name, callback) => tapAfterSeal.call(afterSeal, name, callback),
+        },
+      },
+      errors,
+    };
+  } catch (cause) {
+    if (cause instanceof NextWebpackBaselineError) throw cause;
+    return unsupportedWebpack("public compilation 형상을 읽을 수 없습니다.");
   }
-  if (
-    !isObject(value.chunkGraph) ||
-    typeof value.chunkGraph.getModuleChunks !== "function"
-  ) {
-    return unsupportedWebpack("public chunk graph를 사용할 수 없습니다.");
-  }
-  if (
-    !isObject(value.entrypoints) ||
-    typeof value.entrypoints.get !== "function"
-  ) {
-    return unsupportedWebpack("public entrypoints를 사용할 수 없습니다.");
-  }
-  if (
-    !isObject(value.hooks) ||
-    !isObject(value.hooks.afterSeal) ||
-    typeof value.hooks.afterSeal.tap !== "function"
-  ) {
-    return unsupportedWebpack("public afterSeal hook을 사용할 수 없습니다.");
-  }
-  if (!Array.isArray(value.errors)) {
-    return unsupportedWebpack("compilation errors를 사용할 수 없습니다.");
-  }
-  return value as unknown as WebpackCompilation;
 };
 
 /**
@@ -208,11 +273,12 @@ type LoaderSourceResult =
   | { readonly kind: "unavailable" };
 
 const loaderSourceOf = (module: WebpackModule): LoaderSourceResult => {
-  if (typeof module.originalSource !== "function") {
-    return { kind: "unavailable" };
-  }
   try {
-    const source = module.originalSource();
+    const originalSource = module.originalSource;
+    if (typeof originalSource !== "function") {
+      return { kind: "unavailable" };
+    }
+    const source = originalSource.call(module);
     if (!isObject(source) || typeof source.source !== "function") {
       return { kind: "unavailable" };
     }
@@ -231,13 +297,19 @@ const loaderSourceOf = (module: WebpackModule): LoaderSourceResult => {
 };
 
 const parentsOf = (group: unknown): readonly unknown[] => {
-  if (!isObject(group) || typeof group.getParents !== "function") {
+  if (!isObject(group)) {
     return unsupportedWebpack(
       "public chunk group parent API를 사용할 수 없습니다.",
     );
   }
   try {
-    const parents = group.getParents();
+    const getParents = group.getParents;
+    if (typeof getParents !== "function") {
+      return unsupportedWebpack(
+        "public chunk group parent API를 사용할 수 없습니다.",
+      );
+    }
+    const parents = getParents.call(group);
     if (!isIterable(parents)) {
       return unsupportedWebpack("chunk group parents를 순회할 수 없습니다.");
     }
@@ -249,12 +321,17 @@ const parentsOf = (group: unknown): readonly unknown[] => {
 };
 
 const groupsOf = (chunk: unknown): readonly unknown[] => {
-  if (!isObject(chunk) || !isIterable(chunk.groupsIterable)) {
+  if (!isObject(chunk)) {
     return unsupportedWebpack("public chunk groups를 순회할 수 없습니다.");
   }
   try {
-    return [...chunk.groupsIterable];
-  } catch {
+    const groups = chunk.groupsIterable;
+    if (!isIterable(groups)) {
+      return unsupportedWebpack("public chunk groups를 순회할 수 없습니다.");
+    }
+    return [...groups];
+  } catch (cause) {
+    if (cause instanceof NextWebpackBaselineError) throw cause;
     return unsupportedWebpack("public chunk groups를 읽을 수 없습니다.");
   }
 };
@@ -268,7 +345,7 @@ const readModuleChunks = (
     if (!isIterable(chunks)) {
       return unsupportedWebpack("module chunks를 순회할 수 없습니다.");
     }
-    return chunks;
+    return [...chunks];
   } catch (cause) {
     if (cause instanceof NextWebpackBaselineError) throw cause;
     return unsupportedWebpack("module chunks를 읽을 수 없습니다.");

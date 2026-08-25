@@ -41,8 +41,13 @@ export interface WebpackModuleDefinition {
   readonly sourceFailure?:
     "missing-original-source" | "original-source-throws" | "source-throws";
   readonly children?: readonly WebpackModuleDefinition[];
-  readonly nestedModulesShape?: "non-iterable" | "throws";
-  readonly groupShape?: "missing-groups" | "missing-parents";
+  readonly nestedModulesShape?:
+    "non-iterable" | "throws" | "iterator-getter-throws";
+  readonly groupShape?:
+    | "missing-groups"
+    | "missing-parents"
+    | "groups-getter-throws"
+    | "parents-getter-throws";
 }
 
 export interface ObservedWebpackModule {
@@ -100,7 +105,8 @@ export const createWebpackFixture = ({
   readonly target?: "web" | "node";
   readonly modules: readonly WebpackModuleDefinition[];
   readonly chunkGraphTiming?: "compilation" | "after-seal";
-  readonly moduleChunksShape?: "iterable" | "non-iterable";
+  readonly moduleChunksShape?:
+    "iterable" | "non-iterable" | "method-getter-throws";
 }): WebpackFixture => {
   const entrypoints = new Map<string, ChunkGroup>();
   for (const definition of definitions) {
@@ -161,6 +167,14 @@ export const createWebpackFixture = ({
           throw new Error("fixture nested modules failure");
         },
       });
+    } else if (definition.nestedModulesShape === "iterator-getter-throws") {
+      const nestedModules = {};
+      Object.defineProperty(nestedModules, Symbol.iterator, {
+        get() {
+          throw new Error("fixture nested iterator sentinel");
+        },
+      });
+      module = { ...module, modules: nestedModules };
     }
     return module;
   };
@@ -172,31 +186,51 @@ export const createWebpackFixture = ({
       const entrypoint = entrypoints.get(name);
       return entrypoint === undefined ? [] : [entrypoint];
     });
-    const moduleGroup: ChunkGroup =
-      definition.groupShape === "missing-parents"
-        ? {}
-        : { getParents: () => parents };
-    chunksByModule.set(
-      module,
-      definition.groupShape === "missing-groups"
-        ? [{}]
-        : [
-            {
-              groupsIterable:
-                definition.entrypoints.length === 0 ? [] : [moduleGroup],
-            },
-          ],
-    );
+    const moduleGroup: ChunkGroup = {};
+    if (definition.groupShape === "parents-getter-throws") {
+      Object.defineProperty(moduleGroup, "getParents", {
+        get() {
+          throw new Error("fixture parents getter sentinel");
+        },
+      });
+    } else if (definition.groupShape !== "missing-parents") {
+      Object.defineProperty(moduleGroup, "getParents", {
+        value: () => parents,
+      });
+    }
+
+    const chunk: Chunk = {};
+    if (definition.groupShape === "groups-getter-throws") {
+      Object.defineProperty(chunk, "groupsIterable", {
+        get() {
+          throw new Error("fixture groups getter sentinel");
+        },
+      });
+    } else if (definition.groupShape !== "missing-groups") {
+      Object.defineProperty(chunk, "groupsIterable", {
+        value: definition.entrypoints.length === 0 ? [] : [moduleGroup],
+      });
+    }
+    chunksByModule.set(module, [chunk]);
     return module;
   });
 
   const afterSeal = createVoidSyncHook();
-  const chunkGraph: WebpackChunkGraphDouble = {
-    getModuleChunks: (module) =>
-      moduleChunksShape === "iterable"
-        ? (chunksByModule.get(module) ?? [])
-        : undefined,
-  };
+  const chunkGraph = {} as WebpackChunkGraphDouble;
+  if (moduleChunksShape === "method-getter-throws") {
+    Object.defineProperty(chunkGraph, "getModuleChunks", {
+      get() {
+        throw new Error("fixture module chunks getter sentinel");
+      },
+    });
+  } else {
+    Object.defineProperty(chunkGraph, "getModuleChunks", {
+      value: (module: ObservedWebpackModule) =>
+        moduleChunksShape === "iterable"
+          ? (chunksByModule.get(module) ?? [])
+          : undefined,
+    });
+  }
   let activeChunkGraph =
     chunkGraphTiming === "compilation" ? chunkGraph : undefined;
   const compilation: WebpackCompilationDouble = {
