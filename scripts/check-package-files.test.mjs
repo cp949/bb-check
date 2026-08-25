@@ -296,7 +296,10 @@ test("exports의 subpath key와 condition key를 섞으면 거부한다", async 
   assert.match(result.problems.join("\n"), /subpath.*condition.*혼합/u);
 });
 
-const checkExports = async (exports) => {
+const checkExports = async (
+  exports,
+  { declarationPath = "dist/index.d.ts" } = {},
+) => {
   const root = await createRepo();
   await writePackage(
     root,
@@ -304,7 +307,7 @@ const checkExports = async (exports) => {
     publicManifest("@fixture/exports", exports),
     {
       "dist/index.js": "export const value = 1;\n",
-      "dist/index.d.ts": "export declare const value = 1;\n",
+      [declarationPath]: "export declare const value: 1;\n",
       "README.md": "# exports fixture\n",
       LICENSE: "fixture license\n",
     },
@@ -316,9 +319,36 @@ const checkExports = async (exports) => {
       "README.md",
       "LICENSE",
       "dist/index.js",
-      "dist/index.d.ts",
+      declarationPath,
     ],
   });
+};
+
+const importActualNodePackage = async (exports) => {
+  const root = await createRepo();
+  await writePackage(
+    root,
+    "node_modules/actual-exports-fixture",
+    {
+      name: "actual-exports-fixture",
+      version: "0.0.0",
+      type: "module",
+      exports,
+    },
+    {
+      "dist/index.js": 'export const marker = "actual-node-runtime";\n',
+      "dist/types.d.ts": "export declare const marker: string;\n",
+    },
+  );
+  return spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      'const loaded = await import("actual-exports-fixture"); process.stdout.write(loaded.marker);',
+    ],
+    { cwd: root, encoding: "utf8" },
+  );
 };
 
 test("Node exports의 유효한 root, condition, subpath, array/null fallback을 허용한다", async () => {
@@ -328,7 +358,7 @@ test("Node exports의 유효한 root, condition, subpath, array/null fallback을
       "root condition",
       { types: "./dist/index.d.ts", import: "./dist/index.js" },
     ],
-    ["root array fallback", [42, null, "./dist/index.js"]],
+    ["root array fallback", [null, "./dist/index.js"]],
     [
       "subpath map",
       {
@@ -344,6 +374,38 @@ test("Node exports의 유효한 root, condition, subpath, array/null fallback을
     assert.doesNotMatch(
       result.problems.join("\n"),
       /\[exports\]/u,
+      `${name}: ${result.problems.join("\n")}`,
+    );
+  }
+});
+
+test("실제 Node가 건너뛰는 invalid/unmatched array 대안을 checker도 fallback 처리한다", async () => {
+  const cases = [
+    ["outside target", ["../outside.js", "./dist/index.js"]],
+    ["node_modules target", ["./node_modules/x", "./dist/index.js"]],
+    ["primitive target", [42, "./dist/index.js"]],
+    [
+      "types-only condition",
+      [{ types: "./dist/types.d.ts" }, "./dist/index.js"],
+    ],
+  ];
+
+  for (const [name, exports] of cases) {
+    const imported = await importActualNodePackage(exports);
+    assert.equal(
+      imported.status,
+      0,
+      `${name}: stdout=${imported.stdout} stderr=${imported.stderr}`,
+    );
+    assert.equal(imported.stdout, "actual-node-runtime", name);
+
+    const result = await checkExports(exports, {
+      declarationPath:
+        name === "types-only condition" ? "dist/types.d.ts" : "dist/index.d.ts",
+    });
+    assert.doesNotMatch(
+      result.problems.join("\n"),
+      /\[(?:exports|declaration)\]/u,
       `${name}: ${result.problems.join("\n")}`,
     );
   }
@@ -370,7 +432,17 @@ test("공개 root가 없거나 Node exports key/target이 잘못된 형태를 �
       { import: 42, default: "./dist/index.js" },
       /invalid export target type/u,
     ],
+    [
+      "selected invalid condition path",
+      { import: "../outside.js", default: "./dist/index.js" },
+      /package 상대 경로|invalid export target/u,
+    ],
     ["invalid-only array", [42], /invalid export target type/u],
+    [
+      "types-only missing runtime",
+      [{ types: "./dist/index.d.ts" }],
+      /사용 가능한 root export/u,
+    ],
   ];
 
   for (const [name, exports, expected] of cases) {
@@ -381,6 +453,48 @@ test("공개 root가 없거나 Node exports key/target이 잘못된 형태를 �
       `${name}: ${result.problems.join("\n")}`,
     );
   }
+});
+
+test("Node의 canonical array-index condition 경계만 거부한다", async () => {
+  for (const key of ["0", "4294967294"]) {
+    const exports = { [key]: "./dist/index.js", default: "./dist/index.js" };
+    const imported = await importActualNodePackage(exports);
+    assert.notEqual(imported.status, 0, key);
+    assert.match(imported.stderr, /ERR_INVALID_PACKAGE_CONFIG/u, key);
+
+    const result = await checkExports(exports);
+    assert.match(result.problems.join("\n"), /integer condition key/u, key);
+  }
+
+  for (const key of ["4294967295", "4294967296", "01", "1.0", "-1"]) {
+    const exports = {
+      [key]: "./dist/not-selected.js",
+      default: "./dist/index.js",
+    };
+    const imported = await importActualNodePackage(exports);
+    assert.equal(
+      imported.status,
+      0,
+      `${key}: stdout=${imported.stdout} stderr=${imported.stderr}`,
+    );
+    assert.equal(imported.stdout, "actual-node-runtime", key);
+
+    const result = await checkExports(exports);
+    assert.doesNotMatch(
+      result.problems.join("\n"),
+      /\[exports\]/u,
+      `${key}: ${result.problems.join("\n")}`,
+    );
+  }
+});
+
+test("검증 대상이 아닌 condition의 invalid target은 선택하지 않는다", async () => {
+  const result = await checkExports({
+    browser: 42,
+    default: "./dist/index.js",
+  });
+
+  assert.doesNotMatch(result.problems.join("\n"), /\[exports\]/u);
 });
 
 test("dependency 필드의 prefix 없는 POSIX와 Windows local path를 거부한다", async () => {
@@ -394,10 +508,12 @@ test("dependency 필드의 prefix 없는 POSIX와 Windows local path를 거부�
         parentRelative: "../local",
         currentRelative: "./local",
         posixAbsolute: "/opt/local",
+        homeShorthand: "~",
       },
       peerDependencies: {
         windowsRooted: "\\local",
         windowsUnc: "\\\\server\\share",
+        homePath: "~/local",
       },
       optionalDependencies: {
         windowsDriveAbsolute: "C:\\local",
@@ -432,6 +548,8 @@ test("dependency 필드의 prefix 없는 POSIX와 Windows local path를 거부�
     "windowsUnc",
     "windowsDriveAbsolute",
     "windowsDriveRelative",
+    "homeShorthand",
+    "homePath",
   ]) {
     assert.match(problems, new RegExp(`${dependency}.*local path`, "u"));
   }

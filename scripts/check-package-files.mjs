@@ -22,6 +22,8 @@ const DEPENDENCY_FIELDS = [
   "peerDependencies",
   "optionalDependencies",
 ];
+const RUNTIME_EXPORT_CONDITIONS = new Set(["import", "node"]);
+const TYPE_EXPORT_CONDITIONS = new Set(["types", "import", "node"]);
 
 const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
 
@@ -176,85 +178,155 @@ const isCoveredByFiles = (path, patterns) =>
     return path === normalized;
   });
 
-const invalidExportTarget = (problems, workspacePath, label, value) => {
-  const type =
-    value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
-  problems.push(
-    formatProblem(
-      workspacePath,
-      "exports",
-      `${label}: invalid export target type (${type})`,
-    ),
+const isCanonicalArrayIndexCondition = (key) => {
+  const index = Number(key);
+  return (
+    Number.isInteger(index) &&
+    index >= 0 &&
+    index < 4_294_967_295 &&
+    String(index) === key
   );
 };
 
-const collectExportTargets = (
-  value,
-  label,
-  workspacePath,
-  problems,
-  targets,
-) => {
-  if (value === null) return;
+const invalidExportTarget = (workspacePath, label, value) => {
+  const type =
+    value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  return {
+    status: "invalid-target",
+    targets: [],
+    problems: [
+      formatProblem(
+        workspacePath,
+        "exports",
+        `${label}: invalid export target type (${type})`,
+      ),
+    ],
+  };
+};
+
+const invalidExportPath = (workspacePath, label, value) => ({
+  status: "invalid-target",
+  targets: [],
+  problems: [
+    formatProblem(
+      workspacePath,
+      "exports",
+      `${label}: invalid export target path (${value})`,
+    ),
+  ],
+});
+
+const invalidExportConfig = (workspacePath, label, message) => ({
+  status: "invalid-config",
+  targets: [],
+  problems: [formatProblem(workspacePath, "exports", `${label}: ${message}`)],
+});
+
+const noExportMatch = (status = "unmatched") => ({
+  status,
+  targets: [],
+  problems: [],
+});
+
+const isValidExportPath = (value) => {
+  if (!value.startsWith("./")) return false;
+  return !value
+    .slice(2)
+    .split("/")
+    .some(
+      (segment) =>
+        segment === "." ||
+        segment === ".." ||
+        segment.toLowerCase() === "node_modules",
+    );
+};
+
+const resolveExportTarget = (value, label, workspacePath, conditions) => {
+  if (value === null) return noExportMatch("null");
   if (typeof value === "string") {
-    targets.push(value);
-    return;
+    return isValidExportPath(value)
+      ? { status: "resolved", targets: [value], problems: [] }
+      : invalidExportPath(workspacePath, label, value);
   }
   if (Array.isArray(value)) {
-    const fallbackProblems = [];
+    let lastInvalidTarget;
+    let resolvedToNull = value.length === 0;
     for (const [index, item] of value.entries()) {
-      const itemProblems = [];
-      const itemTargets = [];
-      collectExportTargets(
+      const result = resolveExportTarget(
         item,
         `${label}[${index}]`,
         workspacePath,
-        itemProblems,
-        itemTargets,
+        conditions,
       );
-      if (itemTargets.length > 0) {
-        problems.push(...itemProblems);
-        targets.push(...itemTargets);
-        return;
+      if (result.status === "resolved") return result;
+      if (result.status === "invalid-config") return result;
+      if (result.status === "invalid-target") {
+        lastInvalidTarget = result;
+        resolvedToNull = false;
+      } else if (result.status === "null") {
+        lastInvalidTarget = undefined;
+        resolvedToNull = true;
       }
-      fallbackProblems.push(...itemProblems);
     }
-    problems.push(...fallbackProblems);
-    return;
+    return (
+      lastInvalidTarget ?? noExportMatch(resolvedToNull ? "null" : undefined)
+    );
   }
   if (typeof value !== "object") {
-    invalidExportTarget(problems, workspacePath, label, value);
-    return;
+    return invalidExportTarget(workspacePath, label, value);
   }
 
   const keys = Object.keys(value);
-  for (const key of keys.filter((key) => /^(?:0|[1-9]\d*)$/u.test(key))) {
-    problems.push(
-      formatProblem(
-        workspacePath,
-        "exports",
-        `${label}: integer condition key는 사용할 수 없습니다: ${key}`,
-      ),
+  const integerCondition = keys.find(isCanonicalArrayIndexCondition);
+  if (integerCondition !== undefined) {
+    return invalidExportConfig(
+      workspacePath,
+      label,
+      `integer condition key는 사용할 수 없습니다: ${integerCondition}`,
     );
   }
   if (keys.some((key) => key.startsWith("."))) {
-    problems.push(
-      formatProblem(
-        workspacePath,
-        "exports",
-        `${label}: condition map 안에는 subpath key를 사용할 수 없습니다.`,
-      ),
+    return invalidExportConfig(
+      workspacePath,
+      label,
+      "condition map 안에는 subpath key를 사용할 수 없습니다.",
     );
   }
   for (const [condition, target] of Object.entries(value)) {
-    collectExportTargets(
+    if (condition !== "default" && !conditions.has(condition)) continue;
+    const result = resolveExportTarget(
       target,
       `${label}.${condition}`,
       workspacePath,
-      problems,
-      targets,
+      conditions,
     );
+    if (result.status !== "unmatched") return result;
   }
+  return noExportMatch();
+};
+
+const resolveExportContexts = (value, label, workspacePath, problems) => {
+  const runtime = resolveExportTarget(
+    value,
+    label,
+    workspacePath,
+    RUNTIME_EXPORT_CONDITIONS,
+  );
+  const types = resolveExportTarget(
+    value,
+    label,
+    workspacePath,
+    TYPE_EXPORT_CONDITIONS,
+  );
+  const resolutionProblems = new Set([...runtime.problems, ...types.problems]);
+  problems.push(...resolutionProblems);
+  const runtimeTargets = runtime.status === "resolved" ? runtime.targets : [];
+  const typeTargets = types.status === "resolved" ? types.targets : [];
+  return {
+    runtimeTargets,
+    typeTargets,
+    targets: [...new Set([...runtimeTargets, ...typeTargets])],
+  };
 };
 
 const validatedExportEntries = (exportsField, workspacePath, problems) => {
@@ -292,28 +364,12 @@ const validatedExportEntries = (exportsField, workspacePath, problems) => {
             ),
           );
         }
-        const targets = [];
-        collectExportTargets(
-          value,
-          `exports[${JSON.stringify(subpath)}]`,
-          workspacePath,
-          problems,
-          targets,
-        );
-        return [subpath, targets];
+        return [subpath, value];
       });
     }
   }
 
-  const targets = [];
-  collectExportTargets(
-    exportsField,
-    "exports",
-    workspacePath,
-    problems,
-    targets,
-  );
-  return [[".", targets]];
+  return [[".", exportsField]];
 };
 
 const declarationFor = (runtimePath) =>
@@ -427,13 +483,26 @@ const validatePackage = async ({
     }
   }
 
-  const exports = validatedExportEntries(
+  const exportEntries = validatedExportEntries(
     manifest.exports,
     workspacePath,
     problems,
   );
+  const exports = exportEntries.map(([subpath, value]) => [
+    subpath,
+    resolveExportContexts(
+      value,
+      subpath === "." ? "exports" : `exports[${JSON.stringify(subpath)}]`,
+      workspacePath,
+      problems,
+    ),
+  ]);
   const rootExport = exports.find(([subpath]) => subpath === ".");
-  if (rootExport === undefined || rootExport[1].length === 0) {
+  const rootRuntimes =
+    rootExport === undefined
+      ? []
+      : targetsMatching(rootExport[1].runtimeTargets, /\.(?:mjs|cjs|js)$/u);
+  if (rootRuntimes.length === 0) {
     problems.push(
       formatProblem(
         workspacePath,
@@ -442,17 +511,9 @@ const validatePackage = async ({
       ),
     );
   }
-  for (const [subpath, targets] of exports) {
+  for (const [subpath, { targets, runtimeTargets, typeTargets }] of exports) {
     for (const target of targets) {
-      if (!target.startsWith("./")) {
-        problems.push(
-          formatProblem(
-            workspacePath,
-            "exports",
-            `${subpath} target은 package 상대 경로여야 합니다: ${target}`,
-          ),
-        );
-      } else if (!packed.has(normalizeArtifactPath(target))) {
+      if (!packed.has(normalizeArtifactPath(target))) {
         problems.push(
           formatProblem(
             workspacePath,
@@ -463,8 +524,8 @@ const validatePackage = async ({
       }
     }
 
-    const runtimes = targetsMatching(targets, /\.(?:mjs|cjs|js)$/u);
-    const declarations = targetsMatching(targets, /\.d\.(?:mts|cts|ts)$/u);
+    const runtimes = targetsMatching(runtimeTargets, /\.(?:mjs|cjs|js)$/u);
+    const declarations = targetsMatching(typeTargets, /\.d\.(?:mts|cts|ts)$/u);
     for (const runtimePath of runtimes) {
       const candidates = [...declarations, declarationFor(runtimePath)];
       if (!candidates.some((path) => packed.has(path))) {
@@ -616,7 +677,7 @@ const validatePackage = async ({
           ),
         );
       }
-      if (/^(?:\.{1,2}[\\/]|[\\/]|[A-Za-z]:)/u.test(spec)) {
+      if (/^(?:~(?:[\\/]|$)|\.{1,2}[\\/]|[\\/]|[A-Za-z]:)/u.test(spec)) {
         problems.push(
           formatProblem(
             workspacePath,
