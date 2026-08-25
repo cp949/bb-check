@@ -73,11 +73,21 @@ const unsupportedWebpack = (message: string): never => {
   );
 };
 
+const withinWebpackBoundary = <T>(message: string, operation: () => T): T => {
+  try {
+    return operation();
+  } catch (cause) {
+    if (cause instanceof NextWebpackBaselineError) throw cause;
+    return unsupportedWebpack(message);
+  }
+};
+
 const isIterable = (value: unknown): value is Iterable<unknown> => {
   if (!isObject(value)) return false;
   try {
     return typeof value[Symbol.iterator] === "function";
-  } catch {
+  } catch (cause) {
+    if (cause instanceof NextWebpackBaselineError) throw cause;
     return false;
   }
 };
@@ -232,19 +242,15 @@ const readCompilation = (value: unknown): WebpackCompilation => {
 const sourceUnitsOf = function* (
   module: WebpackModule,
 ): Generator<WebpackModule> {
-  let hasNestedModules: boolean;
-  try {
-    hasNestedModules = "modules" in module;
-  } catch {
-    return unsupportedWebpack("inner module container를 확인할 수 없습니다.");
-  }
+  const hasNestedModules = withinWebpackBoundary(
+    "inner module container를 확인할 수 없습니다.",
+    () => "modules" in module,
+  );
   if (hasNestedModules) {
-    let nestedModules: unknown;
-    try {
-      nestedModules = module.modules;
-    } catch {
-      return unsupportedWebpack("inner module container를 읽을 수 없습니다.");
-    }
+    const nestedModules = withinWebpackBoundary(
+      "inner module container를 읽을 수 없습니다.",
+      () => module.modules,
+    );
     if (!isIterable(nestedModules)) {
       return unsupportedWebpack("inner module container를 순회할 수 없습니다.");
     }
@@ -364,8 +370,17 @@ const isPagesClientReachable = (
     if (!isObject(group) || visited.has(group)) continue;
     visited.add(group);
 
-    const name = group.name;
-    if (typeof name === "string" && entrypoints.get(name) === group) {
+    const name = withinWebpackBoundary(
+      "chunk group name을 읽을 수 없습니다.",
+      () => group.name,
+    );
+    const isEntrypoint =
+      typeof name === "string" &&
+      withinWebpackBoundary(
+        "public entrypoints를 읽을 수 없습니다.",
+        () => entrypoints.get(name) === group,
+      );
+    if (isEntrypoint) {
       if (name.startsWith("pages/")) return true;
       continue;
     }
@@ -414,16 +429,17 @@ const inspectCompilation = (
     if (!isClientEntryReachable) continue;
 
     for (const unit of sourceUnitsOf(module)) {
-      if (typeof unit.resource !== "string" || unit.resource === "") continue;
-      if (
-        typeof unit.type !== "string" ||
-        !unit.type.startsWith("javascript/")
-      ) {
+      const { resource, type } = withinWebpackBoundary(
+        "module resource/type을 읽을 수 없습니다.",
+        () => ({ resource: unit.resource, type: unit.type }),
+      );
+      if (typeof resource !== "string" || resource === "") continue;
+      if (typeof type !== "string" || !type.startsWith("javascript/")) {
         continue;
       }
       const eligibility = createVerdict({
         config: input.config,
-        resource: unit.resource,
+        resource,
         syntax: { diagnostics: [] },
         isClientEntryReachable,
       });
@@ -450,13 +466,13 @@ const inspectCompilation = (
       const source = loaded.source;
 
       const hash = contentHash(source);
-      const analysisKey = `${cacheNamespace}\u0000${unit.resource}\u0000${hash}`;
+      const analysisKey = `${cacheNamespace}\u0000${resource}\u0000${hash}`;
       if (analyzed.has(analysisKey)) continue;
       analyzed.add(analysisKey);
 
       const verdict = createVerdict({
         config: input.config,
-        resource: unit.resource,
+        resource,
         syntax: analyzeSyntax(source, input.baseline),
         isClientEntryReachable,
       });
@@ -486,7 +502,12 @@ const inspectCompilation = (
   pending.sort((left, right) =>
     left.sortKey < right.sortKey ? -1 : left.sortKey > right.sortKey ? 1 : 0,
   );
-  compilation.errors.push(...pending.map(({ error }) => error));
+  withinWebpackBoundary("compilation errors를 갱신할 수 없습니다.", () => {
+    Array.prototype.push.call(
+      compilation.errors,
+      ...pending.map(({ error }) => error),
+    );
+  });
 };
 
 export const createWebpackPlugin = (
@@ -499,13 +520,23 @@ export const createWebpackPlugin = (
       const compilationHook = readCompilationHook(compiler);
       if (!isClientCompiler(compiler)) return;
 
-      compilationHook.tap(PLUGIN_NAME, (value) => {
-        const afterSealHook = readAfterSealHook(value);
-        afterSealHook.tap(PLUGIN_NAME, () => {
-          const compilation = readCompilation(value);
-          inspectCompilation(compilation, input, cacheNamespace);
-        });
-      });
+      withinWebpackBoundary(
+        "public compilation hook을 등록할 수 없습니다.",
+        () => {
+          compilationHook.tap(PLUGIN_NAME, (value) => {
+            const afterSealHook = readAfterSealHook(value);
+            withinWebpackBoundary(
+              "public afterSeal hook을 등록할 수 없습니다.",
+              () => {
+                afterSealHook.tap(PLUGIN_NAME, () => {
+                  const compilation = readCompilation(value);
+                  inspectCompilation(compilation, input, cacheNamespace);
+                });
+              },
+            );
+          });
+        },
+      );
     },
   };
 };

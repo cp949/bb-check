@@ -40,6 +40,8 @@ export interface WebpackModuleDefinition {
   readonly entrypoints: readonly string[];
   readonly sourceFailure?:
     "missing-original-source" | "original-source-throws" | "source-throws";
+  readonly resourceShape?: "getter-throws";
+  readonly typeShape?: "getter-throws";
   readonly children?: readonly WebpackModuleDefinition[];
   readonly nestedModulesShape?:
     "non-iterable" | "throws" | "iterator-getter-throws";
@@ -47,7 +49,8 @@ export interface WebpackModuleDefinition {
     | "missing-groups"
     | "missing-parents"
     | "groups-getter-throws"
-    | "parents-getter-throws";
+    | "parents-getter-throws"
+    | "name-getter-throws";
 }
 
 export interface ObservedWebpackModule {
@@ -74,10 +77,14 @@ interface WebpackChunkGraphDouble {
   readonly getModuleChunks: (module: ObservedWebpackModule) => unknown;
 }
 
+interface WebpackEntrypointsDouble {
+  readonly get: (name: string) => ChunkGroup | undefined;
+}
+
 export interface WebpackCompilationDouble {
   readonly modules: Iterable<ObservedWebpackModule>;
   readonly chunkGraph: WebpackChunkGraphDouble | undefined;
-  readonly entrypoints: ReadonlyMap<string, ChunkGroup>;
+  readonly entrypoints: WebpackEntrypointsDouble;
   readonly hooks: { readonly afterSeal: VoidSyncHook };
   readonly errors: Error[];
 }
@@ -101,12 +108,14 @@ export const createWebpackFixture = ({
   modules: definitions,
   chunkGraphTiming = "compilation",
   moduleChunksShape = "iterable",
+  entrypointsShape = "map",
 }: {
   readonly target?: "web" | "node";
   readonly modules: readonly WebpackModuleDefinition[];
   readonly chunkGraphTiming?: "compilation" | "after-seal";
   readonly moduleChunksShape?:
     "iterable" | "non-iterable" | "method-getter-throws";
+  readonly entrypointsShape?: "map" | "get-throws";
 }): WebpackFixture => {
   const entrypoints = new Map<string, ChunkGroup>();
   for (const definition of definitions) {
@@ -154,6 +163,21 @@ export const createWebpackFixture = ({
       },
     };
 
+    if (definition.resourceShape === "getter-throws") {
+      Object.defineProperty(module, "resource", {
+        get() {
+          throw new Error("fixture resource getter sentinel");
+        },
+      });
+    }
+    if (definition.typeShape === "getter-throws") {
+      Object.defineProperty(module, "type", {
+        get() {
+          throw new Error("fixture type getter sentinel");
+        },
+      });
+    }
+
     if (definition.children !== undefined) {
       module = {
         ...module,
@@ -198,6 +222,13 @@ export const createWebpackFixture = ({
         value: () => parents,
       });
     }
+    if (definition.groupShape === "name-getter-throws") {
+      Object.defineProperty(moduleGroup, "name", {
+        get() {
+          throw new Error("fixture group name getter sentinel");
+        },
+      });
+    }
 
     const chunk: Chunk = {};
     if (definition.groupShape === "groups-getter-throws") {
@@ -233,12 +264,20 @@ export const createWebpackFixture = ({
   }
   let activeChunkGraph =
     chunkGraphTiming === "compilation" ? chunkGraph : undefined;
+  const exposedEntrypoints: WebpackEntrypointsDouble =
+    entrypointsShape === "get-throws"
+      ? {
+          get() {
+            throw new Error("fixture entrypoints get sentinel");
+          },
+        }
+      : entrypoints;
   const compilation: WebpackCompilationDouble = {
     modules,
     get chunkGraph() {
       return activeChunkGraph;
     },
-    entrypoints,
+    entrypoints: exposedEntrypoints,
     hooks: { afterSeal },
     errors: [],
   };

@@ -261,6 +261,45 @@ describe("createWebpackPlugin", () => {
     expectStableWebpackShapeError(() => fixture.run());
   });
 
+  it.each([
+    { name: "chunk group name getter 예외", groupShape: "name-getter-throws" },
+    { name: "entrypoints get 호출 예외", entrypointsShape: "get-throws" },
+    { name: "module resource getter 예외", resourceShape: "getter-throws" },
+    { name: "module type getter 예외", typeShape: "getter-throws" },
+  ] satisfies ReadonlyArray<{
+    name: string;
+    groupShape?: "name-getter-throws";
+    entrypointsShape?: "get-throws";
+    resourceShape?: "getter-throws";
+    typeShape?: "getter-throws";
+  }>)("$name도 sentinel을 노출하지 않고 fail-closed 한다", (shape) => {
+    const fixture = createWebpackFixture({
+      modules: [
+        {
+          ...pageModule("dist/hostile.js", "const value = input?.value;"),
+          ...(shape.groupShape === undefined
+            ? {}
+            : { groupShape: shape.groupShape }),
+          ...(shape.resourceShape === undefined
+            ? {}
+            : { resourceShape: shape.resourceShape }),
+          ...(shape.typeShape === undefined
+            ? {}
+            : { typeShape: shape.typeShape }),
+        },
+      ],
+      ...(shape.entrypointsShape === undefined
+        ? {}
+        : { entrypointsShape: shape.entrypointsShape }),
+    });
+    createWebpackPlugin(
+      { config, baseline: baselineFor() },
+      { dev: false },
+    ).apply(fixture.compiler);
+
+    expectStableWebpackShapeError(() => fixture.run());
+  });
+
   it("iterable inner modules를 가진 합성 module은 각 loader source를 검사한다", () => {
     const { errors } = runPlugin({
       definitions: [
