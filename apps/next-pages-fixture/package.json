@@ -1,0 +1,30 @@
+{
+  "name": "next-pages-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint next.config.mjs pages packages --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@cp949/next-webpack-baseline": "0.1.0",
+    "next": "16.3.2",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "syntax-fixture": "file:packages/syntax-fixture"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "typescript": "7.0.2"
+  },
+  "browserslist": {
+    "production": [
+      "chrome 75"
+    ],
+    "development": [
+      "last 1 chrome version"
+    ]
+  }
+}
