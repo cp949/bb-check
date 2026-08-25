@@ -1,5 +1,18 @@
 export interface NextWebpackBaselineConfig {
-  readonly [key: string]: unknown;
+  readonly projectDir: string;
+  readonly policy: readonly PackagePolicy[];
+  readonly waivers?: readonly PackageWaiver[];
+}
+
+export interface PackagePolicy {
+  readonly package: string;
+  readonly reason: string;
+}
+
+export interface PackageWaiver {
+  readonly package: string;
+  readonly reason: string;
+  readonly allowedEntrypoints: readonly string[];
 }
 
 export interface NextWebpackBaseline {

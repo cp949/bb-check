@@ -29,5 +29,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint . --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "browserslist": "4.28.8"
   }
 }

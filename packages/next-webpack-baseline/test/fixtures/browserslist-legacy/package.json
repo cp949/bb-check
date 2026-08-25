@@ -1,0 +1,13 @@
+{
+  "name": "browserslist-legacy-fixture",
+  "private": true,
+  "browserslist": {
+    "production": [
+      "chrome 75",
+      "firefox 68"
+    ],
+    "development": [
+      "chrome 100"
+    ]
+  }
+}
