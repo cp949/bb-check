@@ -1,5 +1,4 @@
 import type { GetServerSideProps } from "next";
-// @ts-expect-error 실제 배포 JavaScript fixture는 declaration 없이 소비한다.
 import { readFixture as readClientFixture } from "syntax-fixture";
 
 interface HomeProps {
