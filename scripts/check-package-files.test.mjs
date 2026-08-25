@@ -373,7 +373,7 @@ test("지원 스키마의 root/subpath 문자열과 정확한 types/import 쌍�
   }
 });
 
-test("삭제 예정 @cp949/bb-check package는 공개 검증 대상에서 제외한다", async () => {
+test("삭제된 @cp949/bb-check package가 다시 생기면 공개 검증을 우회하지 못한다", async () => {
   const root = await createRepo();
   await writePackage(root, "packages/bb-check", {
     ...publicManifest("@cp949/bb-check", null),
@@ -410,9 +410,15 @@ test("삭제 예정 @cp949/bb-check package는 공개 검증 대상에서 제외
     },
   });
 
-  assert.deepEqual(visited, ["@cp949/next-webpack-baseline"]);
-  assert.deepEqual(result.workspacePaths, ["packages/next-webpack-baseline"]);
-  assert.deepEqual(result.problems, []);
+  assert.deepEqual(visited, [
+    "@cp949/bb-check",
+    "@cp949/next-webpack-baseline",
+  ]);
+  assert.deepEqual(result.workspacePaths, [
+    "packages/bb-check",
+    "packages/next-webpack-baseline",
+  ]);
+  assert.match(result.problems.join("\n"), /packages\/bb-check \[exports\]/u);
 });
 
 test("필수 next-webpack-baseline workspace identity를 fail-closed로 검증한다", async () => {

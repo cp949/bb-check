@@ -17,7 +17,6 @@ const LEGACY_FORBIDDEN_DEPENDENCIES = new Set([
   "@cp949/bb-library",
   "@cp949/bb-nextjs",
 ]);
-const EXCLUDED_LEGACY_PUBLIC_WORKSPACES = new Set(["packages/bb-check"]);
 const REQUIRED_PUBLIC_PACKAGE = {
   workspacePath: "packages/next-webpack-baseline",
   name: "@cp949/next-webpack-baseline",
@@ -712,7 +711,6 @@ export const checkPublicWorkspacePackages = async ({
   const publicPackages = workspaces.filter(
     ({ workspacePath, manifest }) =>
       manifest.private !== true &&
-      !EXCLUDED_LEGACY_PUBLIC_WORKSPACES.has(workspacePath) &&
       !(
         workspacePath === REQUIRED_PUBLIC_PACKAGE.workspacePath &&
         (manifest.name !== REQUIRED_PUBLIC_PACKAGE.name ||

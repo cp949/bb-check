@@ -13,9 +13,7 @@ permissions:
 
 jobs:
   ubuntu-node22:
-    # packages/bb-check, packages/bb-library, packages/core와 bb-check의 직접
-    # consumer인 apps/demo는 삭제 예정인 legacy 경계라 실행하지 않는다.
-    name: ubuntu-node22 (active non-legacy gate)
+    name: ubuntu-node22 (next webpack baseline full gate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
