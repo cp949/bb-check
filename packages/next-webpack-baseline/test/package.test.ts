@@ -1,6 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+
+const packageDir = fileURLToPath(new URL("..", import.meta.url));
 
 const readManifest = async () =>
   JSON.parse(
@@ -43,5 +47,33 @@ describe("@cp949/next-webpack-baseline 공개 package 계약", () => {
         /chromium|puppeteer|playwright/iu.test(name),
       ),
     ).toBe(false);
+  });
+
+  it("빌드된 root export에서 facade를 import하고 정상 객체를 반환한다", async () => {
+    const npmCliPath = process.env.npm_execpath;
+    if (npmCliPath === undefined) {
+      throw new Error("npm_execpath가 없어 package build를 실행할 수 없다");
+    }
+
+    const build = spawnSync(process.execPath, [npmCliPath, "run", "build"], {
+      cwd: packageDir,
+      encoding: "utf8",
+    });
+
+    if (build.status !== 0) {
+      throw new Error(
+        `package build가 실패했다:\n${build.stdout}${build.stderr}`,
+      );
+    }
+
+    const packageRoot = await import(
+      `${pathToFileURL(resolve(packageDir, "dist/index.js")).href}?${Date.now()}`
+    );
+    const config = { enabled: true };
+
+    expect(packageRoot.defineConfig(config)).toEqual(config);
+    expect(packageRoot.createNextWebpackBaseline(config)).toEqual({
+      options: config,
+    });
   });
 });

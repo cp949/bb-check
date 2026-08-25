@@ -10,6 +10,7 @@ export default defineConfig({
     lib: {
       entry: resolve(packageDir, "src/index.ts"),
       formats: ["es"],
+      fileName: "index",
     },
   },
 });
