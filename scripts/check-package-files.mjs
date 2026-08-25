@@ -17,7 +17,11 @@ const LEGACY_FORBIDDEN_DEPENDENCIES = new Set([
   "@cp949/bb-library",
   "@cp949/bb-nextjs",
 ]);
-const EXCLUDED_LEGACY_PUBLIC_PACKAGES = new Set(["@cp949/bb-check"]);
+const EXCLUDED_LEGACY_PUBLIC_WORKSPACES = new Set(["packages/bb-check"]);
+const REQUIRED_PUBLIC_PACKAGE = {
+  workspacePath: "packages/next-webpack-baseline",
+  name: "@cp949/next-webpack-baseline",
+};
 const DEPENDENCY_FIELDS = [
   "dependencies",
   "peerDependencies",
@@ -186,7 +190,7 @@ const isPlainObject = (value) =>
     Object.getPrototypeOf(value) === null);
 
 const hasSafePathSegments = (value, prefix) => {
-  if (!value.startsWith(prefix) || /[\\%*]/u.test(value)) return false;
+  if (!value.startsWith(prefix) || /[\\%*?#]/u.test(value)) return false;
   const segments = value.slice(2).split("/");
   return segments.every(
     (segment) =>
@@ -660,10 +664,64 @@ export const checkPublicWorkspacePackages = async ({
   readPackFiles = readNpmPackFiles,
 } = {}) => {
   const workspaces = await discoverWorkspacePackages(repoRoot);
+  const problems = [];
+  const requiredPackage = workspaces.find(
+    ({ workspacePath }) =>
+      workspacePath === REQUIRED_PUBLIC_PACKAGE.workspacePath,
+  );
+  if (requiredPackage === undefined) {
+    problems.push(
+      formatProblem(
+        REQUIRED_PUBLIC_PACKAGE.workspacePath,
+        "workspace",
+        "필수 공개 package가 없습니다.",
+      ),
+    );
+  } else {
+    if (requiredPackage.manifest.name !== REQUIRED_PUBLIC_PACKAGE.name) {
+      problems.push(
+        formatProblem(
+          REQUIRED_PUBLIC_PACKAGE.workspacePath,
+          "workspace",
+          `package name은 ${REQUIRED_PUBLIC_PACKAGE.name}이어야 합니다.`,
+        ),
+      );
+    }
+    if (requiredPackage.manifest.private !== false) {
+      problems.push(
+        formatProblem(
+          REQUIRED_PUBLIC_PACKAGE.workspacePath,
+          "workspace",
+          "필수 공개 package의 private는 false여야 합니다.",
+        ),
+      );
+    }
+  }
+  const requiredNameMatches = workspaces.filter(
+    ({ manifest }) => manifest.name === REQUIRED_PUBLIC_PACKAGE.name,
+  );
+  if (requiredNameMatches.length !== 1) {
+    problems.push(
+      formatProblem(
+        REQUIRED_PUBLIC_PACKAGE.workspacePath,
+        "workspace",
+        `package name ${REQUIRED_PUBLIC_PACKAGE.name}은 정확히 한 workspace에만 있어야 합니다.`,
+      ),
+    );
+  }
   const publicPackages = workspaces.filter(
-    ({ manifest }) =>
+    ({ workspacePath, manifest }) =>
       manifest.private !== true &&
-      !EXCLUDED_LEGACY_PUBLIC_PACKAGES.has(manifest.name),
+      !EXCLUDED_LEGACY_PUBLIC_WORKSPACES.has(workspacePath) &&
+      !(
+        workspacePath === REQUIRED_PUBLIC_PACKAGE.workspacePath &&
+        (manifest.name !== REQUIRED_PUBLIC_PACKAGE.name ||
+          manifest.private !== false)
+      ) &&
+      !(
+        workspacePath !== REQUIRED_PUBLIC_PACKAGE.workspacePath &&
+        manifest.name === REQUIRED_PUBLIC_PACKAGE.name
+      ),
   );
   const privateWorkspaceNames = new Set(
     workspaces
@@ -671,7 +729,6 @@ export const checkPublicWorkspacePackages = async ({
       .map(({ manifest }) => manifest.name)
       .filter((name) => typeof name === "string"),
   );
-  const problems = [];
   let packedFileCount = 0;
   for (const packageInfo of publicPackages) {
     const packedPaths = await readPackFiles(packageInfo);

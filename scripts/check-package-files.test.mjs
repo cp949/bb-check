@@ -415,6 +415,78 @@ test("삭제 예정 @cp949/bb-check package는 공개 검증 대상에서 제외
   assert.deepEqual(result.problems, []);
 });
 
+test("필수 next-webpack-baseline workspace identity를 fail-closed로 검증한다", async () => {
+  for (const [name, manifest, expected] of [
+    ["missing", undefined, /필수 공개 package가 없습니다/u],
+    [
+      "renamed",
+      publicManifest("@fixture/renamed", { ".": "./dist/index.js" }),
+      /package name.*@cp949\/next-webpack-baseline/u,
+    ],
+    [
+      "private",
+      {
+        ...publicManifest("@cp949/next-webpack-baseline", {
+          ".": "./dist/index.js",
+        }),
+        private: true,
+      },
+      /private는 false/u,
+    ],
+  ]) {
+    const root = await createRepo();
+    if (manifest !== undefined) {
+      await writePackage(root, "packages/next-webpack-baseline", manifest);
+    }
+    let packCalls = 0;
+
+    const result = await checkPublicWorkspacePackages({
+      repoRoot: root,
+      readPackFiles: async () => {
+        packCalls += 1;
+        return [];
+      },
+    });
+
+    assert.equal(packCalls, 0, name);
+    assert.match(result.problems.join("\n"), expected, name);
+  }
+
+  const root = await createRepo();
+  const manifest = publicManifest("@cp949/next-webpack-baseline", {
+    ".": "./dist/index.js",
+  });
+  const artifacts = {
+    "dist/index.js": "export const value = 1;\n",
+    "dist/index.d.ts": "export declare const value: 1;\n",
+    "README.md": "# active package\n",
+    LICENSE: "fixture license\n",
+  };
+  await writePackage(
+    root,
+    "packages/next-webpack-baseline",
+    manifest,
+    artifacts,
+  );
+  await writePackage(root, "apps/duplicate-name", manifest, artifacts);
+
+  const duplicateResult = await checkPublicWorkspacePackages({
+    repoRoot: root,
+    readPackFiles: async () => [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/index.js",
+      "dist/index.d.ts",
+    ],
+  });
+
+  assert.match(
+    duplicateResult.problems.join("\n"),
+    /package name.*정확히 한 workspace/u,
+  );
+});
+
 test("top-level과 subpath value의 지원하지 않는 exports 형상을 fail-closed로 거부한다", async () => {
   const cases = [
     ["top-level string", "./dist/index.js", /subpath map/u],
@@ -498,6 +570,8 @@ test("unsafe subpath key를 안정적인 exports 진단으로 거부한다", asy
     "./feature/*",
     "./feature\\child",
     "./feature%2Fchild",
+    "./feature?query",
+    "./feature#fragment",
     "./feature/./child",
     "./feature/../child",
     "./node_modules/child",
@@ -561,6 +635,46 @@ test("runtime과 declaration target을 ./dist 안전 경로와 대응 확장자�
   ]) {
     const result = await checkExports({ ".": value });
     assert.match(result.problems.join("\n"), expected, name);
+  }
+});
+
+test("runtime과 declaration target의 URL query와 fragment를 거부한다", async () => {
+  for (const marker of ["?query", "#fragment"]) {
+    const runtimeTarget = `./dist/index${marker}.js`;
+    const runtimeResult = await checkExports(
+      { ".": runtimeTarget },
+      {
+        artifacts: {
+          [`dist/index${marker}.js`]: "export const value = 1;\n",
+          [`dist/index${marker}.d.ts`]: "export declare const value: 1;\n",
+        },
+      },
+    );
+    assert.match(
+      runtimeResult.problems.join("\n"),
+      /runtime target/u,
+      runtimeTarget,
+    );
+
+    const declarationTarget = `./dist/index${marker}.d.ts`;
+    const declarationResult = await checkExports(
+      {
+        ".": {
+          types: declarationTarget,
+          import: "./dist/index.js",
+        },
+      },
+      {
+        artifacts: {
+          [`dist/index${marker}.d.ts`]: "export declare const value: 1;\n",
+        },
+      },
+    );
+    assert.match(
+      declarationResult.problems.join("\n"),
+      /types target/u,
+      declarationTarget,
+    );
   }
 });
 
