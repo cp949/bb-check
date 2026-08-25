@@ -19,6 +19,7 @@ import {
   listTarballRoots,
   listTrackedFiles,
   parsePackResult,
+  parsePublicWordsArguments,
   runScanner,
 } from "./check-public-words.mjs";
 
@@ -30,6 +31,38 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 // 공개 파일에 없는 합성 pattern은 source에 완성된 문자열을 남기지 않도록
 // 두 조각으로 나눠 런타임에만 이어 붙인다.
 const ABSENT_SYNTHETIC_PATTERN = ["zz-test-forbidden", "-token-9f3c"].join("");
+
+test("CLI argv는 generic 또는 정확한 --release 하나만 허용한다", () => {
+  assert.deepEqual(parsePublicWordsArguments([]), { release: false });
+  assert.deepEqual(parsePublicWordsArguments(["--release"]), { release: true });
+  assert.throws(
+    () => parsePublicWordsArguments(["--relase"]),
+    /BB_PUBLIC_WORDS_ARGS/u,
+  );
+  assert.throws(
+    () => parsePublicWordsArguments(["--release", "--release"]),
+    /BB_PUBLIC_WORDS_ARGS/u,
+  );
+});
+
+test("CLI typo와 duplicate는 npm pack 전에 실패하고 secret argv를 출력하지 않는다", () => {
+  const secretTypo = ["--rel", "ease-secret-7b2d"].join("");
+  for (const args of [[secretTypo], ["--release", "--release"]]) {
+    const result = spawnSync(process.execPath, [scriptPath, ...args], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BB_CHECK_FORBIDDEN_WORDS: secretTypo,
+        npm_execpath: "Z:/must-not-run/npm-cli.js",
+      },
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /BB_PUBLIC_WORDS_ARGS/u);
+    assert.doesNotMatch(result.stdout + result.stderr, new RegExp(secretTypo));
+    assert.doesNotMatch(result.stderr, /npm pack/u);
+  }
+});
 
 test("공개 tarball scan 대상은 next webpack baseline 하나다", async () => {
   assert.deepEqual(
@@ -235,7 +268,12 @@ describe("runScanner", () => {
       patterns: ["private-product"],
     });
     assert.deepEqual(result.matches, [
-      { file: "README.md", line: 2, pattern: "private-product" },
+      {
+        kind: "content",
+        file: "README.md",
+        line: 2,
+        pattern: "private-product",
+      },
     ]);
   });
 
@@ -260,14 +298,25 @@ describe("runScanner", () => {
         patterns: ["alpha-secret", "beta-secret"],
       });
       assert.deepEqual(
-        result.matches.map(({ file, line, pattern }) => ({
+        result.matches.map(({ kind, file, line, pattern }) => ({
+          kind,
           file,
           line,
           pattern,
         })),
         [
-          { file: "notes.txt", line: 1, pattern: "alpha-secret" },
-          { file: "notes.txt", line: 1, pattern: "beta-secret" },
+          {
+            kind: "content",
+            file: "notes.txt",
+            line: 1,
+            pattern: "alpha-secret",
+          },
+          {
+            kind: "content",
+            file: "notes.txt",
+            line: 1,
+            pattern: "beta-secret",
+          },
         ],
       );
     } finally {
@@ -294,7 +343,12 @@ describe("runScanner: binary-safe", () => {
 
       assert.deepEqual(result.skipped, ["asset.bin"]);
       assert.deepEqual(result.matches, [
-        { file: "README.md", line: 1, pattern: "private-product" },
+        {
+          kind: "content",
+          file: "README.md",
+          line: 1,
+          pattern: "private-product",
+        },
       ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -314,6 +368,27 @@ describe("runScanner: binary-safe", () => {
 });
 
 describe("runScanner: 파일 root(tracked file / tarball 파일 사용을 흉내)", () => {
+  test("reported file path에만 있는 pattern을 path match로 보고한다", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bb-check-public-words-path-"));
+    const pathPattern = ["path-only-secret", "-5a9e"].join("");
+    try {
+      const relativePath = `dist/${pathPattern}.js`;
+      await mkdir(join(dir, "dist"), { recursive: true });
+      await writeFile(join(dir, relativePath), "// harmless\n", "utf8");
+
+      const result = await runScanner({
+        roots: [relativePath],
+        patterns: [pathPattern],
+        cwd: dir,
+      });
+      assert.deepEqual(result.matches, [
+        { kind: "path", file: relativePath, pattern: pathPattern },
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("파일 root는 넘겨준 문자열을 그대로 file로 보고한다", async () => {
     const dir = await mkdtemp(
       join(tmpdir(), "bb-check-public-words-fileroot-"),
@@ -335,14 +410,21 @@ describe("runScanner: 파일 root(tracked file / tarball 파일 사용을 흉내
       });
 
       assert.deepEqual(
-        result.matches.map(({ file, line, pattern }) => ({
+        result.matches.map(({ kind, file, line, pattern }) => ({
+          kind,
           file,
           line,
           pattern,
         })),
         [
-          { file: "README.md", line: 1, pattern: "private-product" },
           {
+            kind: "content",
+            file: "README.md",
+            line: 1,
+            pattern: "private-product",
+          },
+          {
+            kind: "content",
             file: "packages/pkg/dist/index.js",
             line: 1,
             pattern: "private-product",
@@ -460,12 +542,15 @@ describe("check-public-words.mjs CLI: dist/**(tarball-only) 경로", () => {
       "합성 pattern을 심었는데도 --release가 통과했다 — dist/**(tarball-only) " +
         `경로가 스캔되지 않는다.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
     );
-    assert.match(result.stderr, /pattern\[0\] source\[0\] line 1/u);
+    assert.match(
+      result.stderr,
+      /pattern\[0\] source\[0\] kind content line 1/u,
+    );
     assert.doesNotMatch(result.stderr, new RegExp(plantedFileName));
   });
 
   test("금지 pattern이 file path에 있어도 CLI 출력에서 원문을 숨긴다", async () => {
-    await writeFile(pathLeakFile, `// ${pathPattern}\n`, "utf8");
+    await writeFile(pathLeakFile, "// harmless path-only fixture\n", "utf8");
     const result = spawnSync(process.execPath, [scriptPath, "--release"], {
       cwd: repoRoot,
       encoding: "utf8",
@@ -473,6 +558,7 @@ describe("check-public-words.mjs CLI: dist/**(tarball-only) 경로", () => {
     });
 
     assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /kind path/u);
     assert.doesNotMatch(result.stdout + result.stderr, new RegExp(pathPattern));
   });
 

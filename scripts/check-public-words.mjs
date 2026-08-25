@@ -73,6 +73,11 @@ const scanFile = async (
   matches,
   skipped,
 ) => {
+  for (const pattern of patterns) {
+    if (reportedName.includes(pattern)) {
+      matches.push({ kind: "path", file: reportedName, pattern });
+    }
+  }
   const buffer = await readFile(absolutePath);
   if (isBinaryBuffer(buffer)) {
     skipped.push(reportedName);
@@ -83,7 +88,12 @@ const scanFile = async (
   lines.forEach((line, index) => {
     for (const pattern of patterns) {
       if (line.includes(pattern)) {
-        matches.push({ file: reportedName, line: index + 1, pattern });
+        matches.push({
+          kind: "content",
+          file: reportedName,
+          line: index + 1,
+          pattern,
+        });
       }
     }
   });
@@ -133,7 +143,7 @@ const walkDirectory = async (
  * 아니라 skipped 목록에 별도로 담는다.
  *
  * @param {{ roots: readonly string[], patterns: readonly string[], cwd?: string }} options
- * @returns {Promise<{ matches: { file: string, line: number, pattern: string }[], skipped: string[] }>}
+ * @returns {Promise<{ matches: ({ kind: "path", file: string, pattern: string } | { kind: "content", file: string, line: number, pattern: string })[], skipped: string[] }>}
  */
 export async function runScanner({ roots, patterns, cwd = process.cwd() }) {
   const matches = [];
@@ -156,7 +166,10 @@ export async function runScanner({ roots, patterns, cwd = process.cwd() }) {
 
   matches.sort((a, b) => {
     if (a.file !== b.file) return a.file < b.file ? -1 : 1;
-    if (a.line !== b.line) return a.line - b.line;
+    if (a.kind !== b.kind) return a.kind === "path" ? -1 : 1;
+    const leftLine = a.kind === "content" ? a.line : 0;
+    const rightLine = b.kind === "content" ? b.line : 0;
+    if (leftLine !== rightLine) return leftLine - rightLine;
     return patterns.indexOf(a.pattern) - patterns.indexOf(b.pattern);
   });
   skipped.sort();
@@ -319,10 +332,20 @@ const redactPatterns = (message, patterns) => {
   return redacted;
 };
 
+export function parsePublicWordsArguments(argv) {
+  if (argv.length === 0) return { release: false };
+  if (argv.length === 1 && argv[0] === "--release") {
+    return { release: true };
+  }
+  throw new Error(
+    "[BB_PUBLIC_WORDS_ARGS] 사용법: check-public-words [--release]",
+  );
+}
+
 // ---- CLI 진입점 --------------------------------------------------------------
 
 async function main() {
-  const release = process.argv.includes("--release");
+  const { release } = parsePublicWordsArguments(process.argv.slice(2));
   const patterns = parsePatterns();
 
   if (release && patterns.length === 0) {
@@ -368,8 +391,9 @@ async function main() {
     );
     matches.forEach((match, index) => {
       const patternIndex = patterns.indexOf(match.pattern);
+      const location = match.kind === "content" ? ` line ${match.line}` : "";
       console.error(
-        `  - pattern[${patternIndex}] source[${index}] line ${match.line}`,
+        `  - pattern[${patternIndex}] source[${index}] kind ${match.kind}${location}`,
       );
     });
     process.exitCode = 1;
