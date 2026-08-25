@@ -9,6 +9,10 @@ describe("resolvePackageResource", () => {
       want: { package: "legacy-widget", entrypoint: "dist/compat.cjs" },
     },
     {
+      resource: "//consumer/node_modules/legacy-widget/index.js",
+      want: { package: "legacy-widget", entrypoint: "index.js" },
+    },
+    {
       resource: "/consumer/node_modules/@scope/legacy-widget/lib/index.js",
       want: { package: "@scope/legacy-widget", entrypoint: "lib/index.js" },
     },
@@ -60,7 +64,14 @@ describe("resolvePackageResource", () => {
     "/consumer/packages/legacy-widget/dist/compat.cjs",
     "/consumer/.yarn/cache/legacy-widget-npm-1.0.0.zip/node_modules/legacy-widget/index.js",
     "/consumer/.yarn/cache/legacy-widget-npm-1.0.0.ZIP/node_modules/legacy-widget/index.js",
+    "/consumer/.yarn/__virtual__/legacy-widget/0/index.js",
     "\\\\node_modules\\share\\consumer\\src\\app.js",
+    "\\\\server\\..\\node_modules\\legacy-widget\\index.js",
+    "\\\\?\\UNC\\server\\node_modules\\legacy-widget\\index.js",
+    "\\\\.\\pipe\\node_modules\\legacy-widget\\index.js",
+    "/",
+    "C:\\",
+    "\\\\server\\share",
     "/consumer/node_modules/legacy-widget",
   ])("지원하지 않는 경로 %s를 안전한 코드로 거부한다", (resource) => {
     expect(() => resolvePackageResource(resource)).toThrow(

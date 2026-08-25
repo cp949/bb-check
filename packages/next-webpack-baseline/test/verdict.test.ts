@@ -276,6 +276,7 @@ describe("createVerdict", () => {
     "",
     "\\consumer\\src\\application.js",
     "/consumer/.yarn/cache/legacy-widget-npm-1.0.0.ZIP/application.js",
+    "/consumer/.yarn/__virtual__/legacy-widget/0/application.js",
   ])(
     "malformed 또는 opaque resource %s는 도달 여부와 무관하게 unresolved 한다",
     (resource) => {
@@ -311,6 +312,28 @@ describe("createVerdict", () => {
       }),
     );
   });
+
+  it.each([
+    "/consumer/node_modules/legacy-widget",
+    "/consumer/node_modules/@scope",
+    "/consumer/node_modules/.invalid/index.js",
+  ])(
+    "unreachable malformed node_modules claim %s도 완전 해석 후 unresolved 한다",
+    (resource) => {
+      expect(() =>
+        createVerdict({
+          config: configFor({ included: true }),
+          resource,
+          syntax: incompatible,
+          isClientEntryReachable: false,
+        }),
+      ).toThrow(
+        expect.objectContaining<Partial<NextWebpackBaselineError>>({
+          code: "NWB_PACKAGE_PATH_UNRESOLVED",
+        }),
+      );
+    },
+  );
 
   it("syntax diagnostics를 입력 순서와 무관하게 안정적으로 정렬한다", () => {
     const verdict = createVerdict({

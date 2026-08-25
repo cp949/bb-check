@@ -28,7 +28,7 @@ const isCurrentDriveRooted = (resource: string): boolean =>
   resource.startsWith("\\") && !resource.startsWith("\\\\");
 
 const isUncResource = (resource: string): boolean =>
-  resource.startsWith("\\\\") || resource.startsWith("//");
+  resource.startsWith("\\\\");
 
 const isWindowsDriveAbsolute = (resource: string): boolean =>
   /^[a-z]:[\\/]/iu.test(resource) && win32.isAbsolute(resource);
@@ -37,6 +37,25 @@ const usesWindowsSemantics = (resource: string): boolean =>
   isCurrentDriveRooted(resource) ||
   isWindowsDriveAbsolute(resource) ||
   isUncResource(resource);
+
+interface UncRoot {
+  readonly segmentCount: number;
+}
+
+const normalUncRoot = (resource: string): UncRoot | undefined => {
+  if (!isUncResource(resource)) return undefined;
+  const root = win32.parse(resource).root;
+  const segments = root.split("\\").filter((segment) => segment !== "");
+  if (
+    segments.length !== 2 ||
+    segments.some(
+      (segment) => segment === "." || segment === ".." || segment === "?",
+    )
+  ) {
+    return undefined;
+  }
+  return { segmentCount: segments.length };
+};
 
 const normalizedSegments = (resource: string): readonly string[] =>
   (usesWindowsSemantics(resource)
@@ -47,22 +66,37 @@ const normalizedSegments = (resource: string): readonly string[] =>
     .filter((segment) => segment !== "");
 
 const isCompleteUncResource = (resource: string): boolean =>
-  isUncResource(resource) && normalizedSegments(resource).length >= 2;
+  normalUncRoot(resource) !== undefined;
+
+const rootSegmentCount = (resource: string): number => {
+  const uncRoot = normalUncRoot(resource);
+  if (uncRoot !== undefined) return uncRoot.segmentCount;
+  return isWindowsDriveAbsolute(resource) ? 1 : 0;
+};
+
+const hasContentBeyondRoot = (resource: string): boolean =>
+  normalizedSegments(resource).length > rootSegmentCount(resource);
 
 const isAbsoluteResource = (resource: string): boolean =>
-  (posix.isAbsolute(resource) && !isUncResource(resource)) ||
-  isWindowsDriveAbsolute(resource) ||
-  isCompleteUncResource(resource);
+  ((posix.isAbsolute(resource) && !isUncResource(resource)) ||
+    isWindowsDriveAbsolute(resource) ||
+    isCompleteUncResource(resource)) &&
+  hasContentBeyondRoot(resource);
 
 const hasOpaqueZipSegment = (resource: string): boolean =>
-  normalizedSegments(resource).some((segment) =>
-    segment.toLowerCase().endsWith(".zip"),
-  );
+  normalizedSegments(resource).some((segment) => {
+    const normalized = segment.toLowerCase();
+    return (
+      normalized.endsWith(".zip") ||
+      normalized === ".yarn" ||
+      normalized === "__virtual__"
+    );
+  });
 
 const nodeModulesBoundary = (resource: string): number => {
   const segments = normalizedSegments(resource);
   let boundary = -1;
-  const firstSearchIndex = isUncResource(resource) ? 2 : 0;
+  const firstSearchIndex = rootSegmentCount(resource);
   for (let index = firstSearchIndex; index < segments.length; index += 1) {
     if (segments[index] === "node_modules") boundary = index;
   }

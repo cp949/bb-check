@@ -57,14 +57,14 @@ const hasExactWaiver = (
 export const createVerdict = (input: CreateVerdictInput): ModuleVerdict => {
   validateWaivers(input.config.waiversByPackage);
   assertResourceShape(input.resource);
-  if (!input.isClientEntryReachable) {
-    return { status: "ignored", diagnostics: [] };
-  }
   if (isProvenOrdinaryAppResource(input.resource)) {
     return { status: "ignored", diagnostics: [] };
   }
 
   const resource: PackageResource = resolvePackageResource(input.resource);
+  if (!input.isClientEntryReachable) {
+    return { status: "ignored", diagnostics: [] };
+  }
   if (!isDownlevelPackage(input.config, resource)) {
     return { status: "ignored", resource, diagnostics: [] };
   }
