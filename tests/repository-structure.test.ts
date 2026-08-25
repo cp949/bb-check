@@ -5,7 +5,22 @@ const readJson = async (path: string) =>
   JSON.parse(await readFile(path, "utf8"));
 
 describe("workspace 공개 경계", () => {
-  it("next-webpack-baseline만 active 공개 패키지다", async () => {
+  it("Track B legacy-browser-smoke는 독립된 공개 workspace package다", async () => {
+    const manifest = await readJson(
+      "packages/legacy-browser-smoke/package.json",
+    );
+
+    expect([manifest.name, manifest.private]).toEqual([
+      "@cp949/legacy-browser-smoke",
+      false,
+    ]);
+
+    const packageRoot =
+      await import("../packages/legacy-browser-smoke/src/index.js");
+    expect(Object.keys(packageRoot)).toEqual(["defineSmokeConfig"]);
+  });
+
+  it("next-webpack-baseline은 Track A 공개 package다", async () => {
     const manifest = await readJson(
       "packages/next-webpack-baseline/package.json",
     );
