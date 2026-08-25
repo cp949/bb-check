@@ -24,21 +24,40 @@ const unresolved = (resource: string): never => {
   throw error;
 };
 
-const isAbsoluteResource = (resource: string): boolean =>
-  !isCurrentDriveRooted(resource) &&
-  (posix.isAbsolute(resource) || win32.isAbsolute(resource));
-
 const isCurrentDriveRooted = (resource: string): boolean =>
   resource.startsWith("\\") && !resource.startsWith("\\\\");
 
 const isUncResource = (resource: string): boolean =>
   resource.startsWith("\\\\") || resource.startsWith("//");
 
+const isWindowsDriveAbsolute = (resource: string): boolean =>
+  /^[a-z]:[\\/]/iu.test(resource) && win32.isAbsolute(resource);
+
+const usesWindowsSemantics = (resource: string): boolean =>
+  isCurrentDriveRooted(resource) ||
+  isWindowsDriveAbsolute(resource) ||
+  isUncResource(resource);
+
 const normalizedSegments = (resource: string): readonly string[] =>
-  posix
-    .normalize(resource.replaceAll("\\", "/"))
+  (usesWindowsSemantics(resource)
+    ? win32.normalize(resource).replaceAll("\\", "/")
+    : posix.normalize(resource)
+  )
     .split("/")
     .filter((segment) => segment !== "");
+
+const isCompleteUncResource = (resource: string): boolean =>
+  isUncResource(resource) && normalizedSegments(resource).length >= 2;
+
+const isAbsoluteResource = (resource: string): boolean =>
+  (posix.isAbsolute(resource) && !isUncResource(resource)) ||
+  isWindowsDriveAbsolute(resource) ||
+  isCompleteUncResource(resource);
+
+const hasOpaqueZipSegment = (resource: string): boolean =>
+  normalizedSegments(resource).some((segment) =>
+    segment.toLowerCase().endsWith(".zip"),
+  );
 
 const nodeModulesBoundary = (resource: string): number => {
   const segments = normalizedSegments(resource);
@@ -54,22 +73,26 @@ const nodeModulesBoundary = (resource: string): number => {
 export const hasNodeModulesBoundaryClaim = (resource: string): boolean =>
   nodeModulesBoundary(resource) !== -1;
 
+/** verdict의 early ignore 전에 절대 resource 형상과 비-opaque filesystem 경로를 보장한다. */
+export const assertResourceShape = (resource: string): void => {
+  if (!isAbsoluteResource(resource) || hasOpaqueZipSegment(resource)) {
+    unresolved(resource);
+  }
+};
+
+/** package 경계 주장이 없는 검증된 application resource만 verdict에서 무시할 수 있다. */
+export const isProvenOrdinaryAppResource = (resource: string): boolean =>
+  isAbsoluteResource(resource) &&
+  !hasOpaqueZipSegment(resource) &&
+  !hasNodeModulesBoundaryClaim(resource);
+
 /** npm의 실제 node_modules 경계를 path 문자열만으로 안전하게 복원한다. */
 export const resolvePackageResource = (resource: string): PackageResource => {
-  if (!isAbsoluteResource(resource)) return unresolved(resource);
+  assertResourceShape(resource);
 
   const segments = normalizedSegments(resource);
   const boundary = nodeModulesBoundary(resource);
   if (boundary === -1) return unresolved(resource);
-
-  // zip archive 내부 경로는 PnP virtual filesystem일 수 있어 host file 경계를 증명하지 못한다.
-  if (
-    segments
-      .slice(0, boundary)
-      .some((segment) => segment.toLowerCase().endsWith(".zip"))
-  ) {
-    return unresolved(resource);
-  }
 
   const first = segments[boundary + 1];
   if (first === undefined) return unresolved(resource);

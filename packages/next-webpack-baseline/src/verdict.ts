@@ -1,16 +1,13 @@
 import type { NormalizedConfig } from "./config.js";
 import { isDownlevelPackage } from "./downlevel.js";
 import {
-  NEXT_WEBPACK_BASELINE_ERROR_CODES,
-  NextWebpackBaselineError,
-} from "./errors.js";
-import {
-  hasNodeModulesBoundaryClaim,
+  assertResourceShape,
+  isProvenOrdinaryAppResource,
   resolvePackageResource,
 } from "./package-name.js";
 import type { PackageResource } from "./package-name.js";
 import type { SyntaxAnalysis, SyntaxDiagnostic } from "./syntax.js";
-import { findExactWaiver, validateWaivers } from "./waiver.js";
+import { validateWaivers } from "./waiver.js";
 
 export interface ModuleVerdict {
   readonly status: "ignored" | "pass" | "waived" | "fail";
@@ -47,27 +44,27 @@ const sortedDiagnostics = (
         },
   );
 
+/** validateWaivers 이후에만 사용하는 exact matcher라 caller가 validation을 우회할 수 없다. */
+const hasExactWaiver = (
+  config: NormalizedConfig,
+  resource: PackageResource,
+): boolean =>
+  (config.waiversByPackage.get(resource.package) ?? []).some((waiver) =>
+    waiver.allowedEntrypoints.includes(resource.entrypoint),
+  );
+
 /** module resource, client graph, syntax 결과를 정책과 waiver에 따라 하나의 안정된 verdict로 결합한다. */
 export const createVerdict = (input: CreateVerdictInput): ModuleVerdict => {
   validateWaivers(input.config.waiversByPackage);
+  assertResourceShape(input.resource);
   if (!input.isClientEntryReachable) {
     return { status: "ignored", diagnostics: [] };
   }
-
-  let resource: PackageResource;
-  try {
-    resource = resolvePackageResource(input.resource);
-  } catch (error) {
-    if (
-      error instanceof NextWebpackBaselineError &&
-      error.code ===
-        NEXT_WEBPACK_BASELINE_ERROR_CODES.PACKAGE_PATH_UNRESOLVED &&
-      !hasNodeModulesBoundaryClaim(input.resource)
-    ) {
-      return { status: "ignored", diagnostics: [] };
-    }
-    throw error;
+  if (isProvenOrdinaryAppResource(input.resource)) {
+    return { status: "ignored", diagnostics: [] };
   }
+
+  const resource: PackageResource = resolvePackageResource(input.resource);
   if (!isDownlevelPackage(input.config, resource)) {
     return { status: "ignored", resource, diagnostics: [] };
   }
@@ -83,7 +80,7 @@ export const createVerdict = (input: CreateVerdictInput): ModuleVerdict => {
   ) {
     return { status: "fail", resource, diagnostics };
   }
-  if (findExactWaiver(input.config.waiversByPackage, resource) !== undefined) {
+  if (hasExactWaiver(input.config, resource)) {
     return { status: "waived", resource, diagnostics };
   }
   return { status: "fail", resource, diagnostics };

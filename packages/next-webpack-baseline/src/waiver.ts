@@ -3,7 +3,6 @@ import {
   NEXT_WEBPACK_BASELINE_ERROR_CODES,
   NextWebpackBaselineError,
 } from "./errors.js";
-import type { PackageResource } from "./package-name.js";
 import type { PackageWaiver } from "./index.js";
 
 const invalidEntrypoint = (): never => {
@@ -39,23 +38,4 @@ export const validateWaivers = (
       }
     }
   }
-};
-
-/** waiver는 package와 완전한 package-relative entrypoint가 모두 같을 때만 찾는다. */
-export const findExactWaiver = (
-  waiversByPackage: ReadonlyMap<string, readonly PackageWaiver[]>,
-  resource: PackageResource,
-): PackageWaiver | undefined => {
-  const waivers = waiversByPackage.get(resource.package) ?? [];
-  const matches: PackageWaiver[] = [];
-  for (const waiver of waivers) {
-    for (const entrypoint of waiver.allowedEntrypoints) {
-      if (entrypoint === resource.entrypoint) matches.push(waiver);
-    }
-  }
-  return matches.sort((left, right) => {
-    if (left.reason < right.reason) return -1;
-    if (left.reason > right.reason) return 1;
-    return 0;
-  })[0];
 };

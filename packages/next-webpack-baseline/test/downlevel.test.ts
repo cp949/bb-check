@@ -31,6 +31,19 @@ describe("resolvePackageResource", () => {
         "\\\\server\\share\\consumer\\node_modules\\@scope\\legacy-widget\\index.js",
       want: { package: "@scope/legacy-widget", entrypoint: "index.js" },
     },
+    {
+      resource: "\\\\server\\share\\..\\node_modules\\legacy-widget\\index.js",
+      want: { package: "legacy-widget", entrypoint: "index.js" },
+    },
+    {
+      resource:
+        "C:\\consumer\\node_modules\\legacy-widget\\dist\\..\\compat.cjs",
+      want: { package: "legacy-widget", entrypoint: "compat.cjs" },
+    },
+    {
+      resource: "/consumer/node_modules/legacy-widget/dist/../compat.cjs",
+      want: { package: "legacy-widget", entrypoint: "compat.cjs" },
+    },
   ] satisfies ReadonlyArray<{
     resource: string;
     want: { package: string; entrypoint: string };

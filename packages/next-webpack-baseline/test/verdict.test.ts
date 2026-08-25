@@ -255,10 +255,14 @@ describe("createVerdict", () => {
     },
   );
 
-  it("도달한 일반 application resource는 package 경계 오류 없이 ignored 한다", () => {
+  it.each([
+    "/consumer/src/application.js",
+    "C:\\consumer\\src\\application.js",
+    "\\\\server\\share\\consumer\\src\\application.js",
+  ])("도달한 일반 application resource %s는 ignored 한다", (appResource) => {
     const verdict = createVerdict({
       config: configFor({ included: true }),
-      resource: "/consumer/src/application.js",
+      resource: appResource,
       syntax: incompatible,
       isClientEntryReachable: true,
     });
@@ -266,17 +270,31 @@ describe("createVerdict", () => {
     expect(verdict).toEqual({ status: "ignored", diagnostics: [] });
   });
 
-  it("client graph 밖 opaque resource는 package 경계 전에 ignored 한다", () => {
-    const verdict = createVerdict({
-      config: configFor({ included: true }),
-      resource:
-        "/consumer/.yarn/cache/legacy-widget-npm-1.0.0.zip/node_modules/legacy-widget/index.js",
-      syntax: incompatible,
-      isClientEntryReachable: false,
-    });
-
-    expect(verdict).toEqual({ status: "ignored", diagnostics: [] });
-  });
+  it.each([
+    "C:chunk.cjs",
+    "relative/chunk.cjs",
+    "",
+    "\\consumer\\src\\application.js",
+    "/consumer/.yarn/cache/legacy-widget-npm-1.0.0.ZIP/application.js",
+  ])(
+    "malformed 또는 opaque resource %s는 도달 여부와 무관하게 unresolved 한다",
+    (resource) => {
+      for (const isClientEntryReachable of [true, false]) {
+        expect(() =>
+          createVerdict({
+            config: configFor({ included: true }),
+            resource,
+            syntax: incompatible,
+            isClientEntryReachable,
+          }),
+        ).toThrow(
+          expect.objectContaining<Partial<NextWebpackBaselineError>>({
+            code: "NWB_PACKAGE_PATH_UNRESOLVED",
+          }),
+        );
+      }
+    },
+  );
 
   it("도달한 opaque node_modules claim은 unresolved 오류로 중단한다", () => {
     expect(() =>
