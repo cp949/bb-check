@@ -1,4 +1,5 @@
 import browserslist from "browserslist";
+import { createRequire } from "node:module";
 import {
   NEXT_WEBPACK_BASELINE_ERROR_CODES,
   NextWebpackBaselineError,
@@ -19,81 +20,26 @@ export interface BrowserBaseline {
   readonly unsupportedSyntax: ReadonlySet<SyntaxFeature>;
 }
 
-type BrowserSupport = Readonly<Record<string, readonly [number, number]>>;
+type BrowserSupport = Readonly<Record<string, string | readonly string[]>>;
 
-const MINIMUM_SUPPORT: Readonly<Record<SyntaxFeature, BrowserSupport>> = {
-  "optional-chaining": {
-    chrome: [80, 0],
-    edge: [80, 0],
-    firefox: [74, 0],
-    ios_saf: [13, 4],
-    opera: [67, 0],
-    safari: [13, 1],
-    samsung: [13, 0],
-  },
-  "nullish-coalescing": {
-    chrome: [80, 0],
-    edge: [80, 0],
-    firefox: [72, 0],
-    ios_saf: [13, 4],
-    opera: [67, 0],
-    safari: [13, 1],
-    samsung: [13, 0],
-  },
-  "class-properties": {
-    chrome: [72, 0],
-    edge: [79, 0],
-    firefox: [69, 0],
-    ios_saf: [14, 5],
-    opera: [59, 0],
-    safari: [14, 1],
-    samsung: [11, 1],
-  },
-  "private-methods": {
-    chrome: [84, 0],
-    edge: [84, 0],
-    firefox: [90, 0],
-    ios_saf: [15, 0],
-    opera: [70, 0],
-    safari: [15, 0],
-    samsung: [14, 0],
-  },
-  "logical-assignment-operators": {
-    chrome: [85, 0],
-    edge: [85, 0],
-    firefox: [79, 0],
-    ios_saf: [14, 0],
-    opera: [71, 0],
-    safari: [14, 0],
-    samsung: [14, 0],
-  },
-  "numeric-separator": {
-    chrome: [75, 0],
-    edge: [79, 0],
-    firefox: [70, 0],
-    ios_saf: [13, 0],
-    opera: [62, 0],
-    safari: [13, 0],
-    samsung: [11, 1],
-  },
-  "async-generator-functions": {
-    chrome: [63, 0],
-    edge: [79, 0],
-    firefox: [57, 0],
-    ios_saf: [11, 0],
-    opera: [50, 0],
-    safari: [11, 0],
-    samsung: [8, 2],
-  },
-  "object-rest-spread": {
-    chrome: [60, 0],
-    edge: [79, 0],
-    firefox: [55, 0],
-    ios_saf: [11, 3],
-    opera: [47, 0],
-    safari: [11, 1],
-    samsung: [8, 2],
-  },
+const require = createRequire(import.meta.url);
+const babelPluginSupport = require("@babel/compat-data/plugins") as Readonly<
+  Record<string, BrowserSupport>
+>;
+
+const COMPAT_DATA_FEATURES: Readonly<Record<SyntaxFeature, string>> = {
+  "optional-chaining": "proposal-optional-chaining",
+  "nullish-coalescing": "proposal-nullish-coalescing-operator",
+  "class-properties": "proposal-class-properties",
+  "private-methods": "proposal-private-methods",
+  "logical-assignment-operators": "proposal-logical-assignment-operators",
+  "numeric-separator": "proposal-numeric-separator",
+  "async-generator-functions": "transform-async-generator-functions",
+  "object-rest-spread": "proposal-object-rest-spread",
+};
+
+const TARGET_BROWSER_NAMES: Readonly<Record<string, string>> = {
+  ios_saf: "ios",
 };
 
 const parseTarget = (
@@ -111,10 +57,23 @@ const isBefore = (
   actual[0] < minimum[0] ||
   (actual[0] === minimum[0] && actual[1] < minimum[1]);
 
+const parseVersion = (
+  version: string,
+): readonly [number, number] | undefined => {
+  const match = /^(\d+)(?:\.(\d+))?/u.exec(version);
+  if (!match?.[1]) return undefined;
+  return [Number(match[1]), Number(match[2] ?? "0")];
+};
+
 const doesNotSupport = (feature: SyntaxFeature, target: string): boolean => {
   const parsed = parseTarget(target);
   if (parsed === undefined) return true;
-  const minimum = MINIMUM_SUPPORT[feature][parsed[0]];
+  const support = babelPluginSupport[COMPAT_DATA_FEATURES[feature]];
+  if (support === undefined) return true;
+  const browser = TARGET_BROWSER_NAMES[parsed[0]] ?? parsed[0];
+  const version = support[browser];
+  if (typeof version !== "string") return true;
+  const minimum = parseVersion(version);
   if (minimum === undefined) return true;
   return isBefore([parsed[1], parsed[2]], minimum);
 };
@@ -158,7 +117,7 @@ export const resolveBrowserBaseline = (projectDir: string): BrowserBaseline => {
 
   const targets = [...new Set(loadedTargets)].sort();
   const unsupportedSyntax = new Set<SyntaxFeature>();
-  for (const feature of Object.keys(MINIMUM_SUPPORT) as SyntaxFeature[]) {
+  for (const feature of Object.keys(COMPAT_DATA_FEATURES) as SyntaxFeature[]) {
     if (targets.some((target) => doesNotSupport(feature, target))) {
       unsupportedSyntax.add(feature);
     }

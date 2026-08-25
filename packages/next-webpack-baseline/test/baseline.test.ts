@@ -97,6 +97,25 @@ describe("resolveBrowserBaseline", () => {
     );
   });
 
+  it("compat-data의 Chrome 91 optional chaining 지원 경계를 baseline에 반영한다", async () => {
+    const fixture = await mkdtemp(resolve(tmpdir(), "nwb-compat-data-"));
+    temporaryDirs.push(fixture);
+    await writeFile(
+      resolve(fixture, "package.json"),
+      JSON.stringify({
+        name: "compat-data-fixture",
+        private: true,
+        browserslist: { production: ["chrome 90"] },
+      }),
+      "utf8",
+    );
+
+    const baseline = resolveBrowserBaseline(fixture);
+
+    expect(baseline.targets).toEqual(["chrome 90"]);
+    expect([...baseline.unsupportedSyntax]).toEqual(["optional-chaining"]);
+  });
+
   it("같은 projectDir의 target 정규화 결과를 안정적으로 유지한다", () => {
     const first = resolveBrowserBaseline(legacyFixture);
     const second = resolveBrowserBaseline(legacyFixture);
