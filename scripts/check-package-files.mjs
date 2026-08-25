@@ -17,13 +17,13 @@ const LEGACY_FORBIDDEN_DEPENDENCIES = new Set([
   "@cp949/bb-library",
   "@cp949/bb-nextjs",
 ]);
+const EXCLUDED_LEGACY_PUBLIC_PACKAGES = new Set(["@cp949/bb-check"]);
 const DEPENDENCY_FIELDS = [
   "dependencies",
   "peerDependencies",
   "optionalDependencies",
 ];
-const RUNTIME_EXPORT_CONDITIONS = new Set(["import", "node"]);
-const TYPE_EXPORT_CONDITIONS = new Set(["types", "import", "node"]);
+const SUPPORTED_EXPORT_CONDITIONS = ["types", "import"];
 
 const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
 
@@ -178,198 +178,173 @@ const isCoveredByFiles = (path, patterns) =>
     return path === normalized;
   });
 
-const isCanonicalArrayIndexCondition = (key) => {
-  const index = Number(key);
-  return (
-    Number.isInteger(index) &&
-    index >= 0 &&
-    index < 4_294_967_295 &&
-    String(index) === key
+const isPlainObject = (value) =>
+  typeof value === "object" &&
+  value !== null &&
+  !Array.isArray(value) &&
+  (Object.getPrototypeOf(value) === Object.prototype ||
+    Object.getPrototypeOf(value) === null);
+
+const hasSafePathSegments = (value, prefix) => {
+  if (!value.startsWith(prefix) || /[\\%*]/u.test(value)) return false;
+  const segments = value.slice(2).split("/");
+  return segments.every(
+    (segment) =>
+      segment !== "" &&
+      segment !== "." &&
+      segment !== ".." &&
+      segment.toLowerCase() !== "node_modules",
   );
 };
 
-const invalidExportTarget = (workspacePath, label, value) => {
-  const type =
-    value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
-  return {
-    status: "invalid-target",
-    targets: [],
-    problems: [
-      formatProblem(
-        workspacePath,
-        "exports",
-        `${label}: invalid export target type (${type})`,
-      ),
-    ],
-  };
+const isSafeSubpathKey = (value) =>
+  value === "." || hasSafePathSegments(value, "./");
+
+const runtimeExtensionOf = (value) => {
+  if (typeof value !== "string") return undefined;
+  if (value.endsWith(".mjs")) return ".mjs";
+  if (value.endsWith(".cjs")) return ".cjs";
+  if (value.endsWith(".js")) return ".js";
+  return undefined;
 };
 
-const invalidExportPath = (workspacePath, label, value) => ({
-  status: "invalid-target",
-  targets: [],
-  problems: [
-    formatProblem(
-      workspacePath,
-      "exports",
-      `${label}: invalid export target path (${value})`,
-    ),
-  ],
-});
-
-const invalidExportConfig = (workspacePath, label, message) => ({
-  status: "invalid-config",
-  targets: [],
-  problems: [formatProblem(workspacePath, "exports", `${label}: ${message}`)],
-});
-
-const noExportMatch = (status = "unmatched") => ({
-  status,
-  targets: [],
-  problems: [],
-});
-
-const isValidExportPath = (value) => {
-  if (!value.startsWith("./")) return false;
-  return !value
-    .slice(2)
-    .split("/")
-    .some(
-      (segment) =>
-        segment === "." ||
-        segment === ".." ||
-        segment.toLowerCase() === "node_modules",
-    );
+const declarationExtensionFor = (runtimeExtension) => {
+  if (runtimeExtension === ".mjs") return ".d.mts";
+  if (runtimeExtension === ".cjs") return ".d.cts";
+  if (runtimeExtension === ".js") return ".d.ts";
+  return undefined;
 };
 
-const resolveExportTarget = (value, label, workspacePath, conditions) => {
-  if (value === null) return noExportMatch("null");
+const isSafeDistTarget = (value) =>
+  typeof value === "string" && hasSafePathSegments(value, "./dist/");
+
+const formatExportValue = (value) =>
+  typeof value === "string" ? value : String(value);
+
+const validateExportValue = (value, label, workspacePath, problems) => {
   if (typeof value === "string") {
-    return isValidExportPath(value)
-      ? { status: "resolved", targets: [value], problems: [] }
-      : invalidExportPath(workspacePath, label, value);
-  }
-  if (Array.isArray(value)) {
-    let lastInvalidTarget;
-    let resolvedToNull = value.length === 0;
-    for (const [index, item] of value.entries()) {
-      const result = resolveExportTarget(
-        item,
-        `${label}[${index}]`,
-        workspacePath,
-        conditions,
-      );
-      if (result.status === "resolved") return result;
-      if (result.status === "invalid-config") return result;
-      if (result.status === "invalid-target") {
-        lastInvalidTarget = result;
-        resolvedToNull = false;
-      } else if (result.status === "null") {
-        lastInvalidTarget = undefined;
-        resolvedToNull = true;
-      }
-    }
-    return (
-      lastInvalidTarget ?? noExportMatch(resolvedToNull ? "null" : undefined)
-    );
-  }
-  if (typeof value !== "object") {
-    return invalidExportTarget(workspacePath, label, value);
-  }
-
-  const keys = Object.keys(value);
-  const integerCondition = keys.find(isCanonicalArrayIndexCondition);
-  if (integerCondition !== undefined) {
-    return invalidExportConfig(
-      workspacePath,
-      label,
-      `integer condition key는 사용할 수 없습니다: ${integerCondition}`,
-    );
-  }
-  if (keys.some((key) => key.startsWith("."))) {
-    return invalidExportConfig(
-      workspacePath,
-      label,
-      "condition map 안에는 subpath key를 사용할 수 없습니다.",
-    );
-  }
-  for (const [condition, target] of Object.entries(value)) {
-    if (condition !== "default" && !conditions.has(condition)) continue;
-    const result = resolveExportTarget(
-      target,
-      `${label}.${condition}`,
-      workspacePath,
-      conditions,
-    );
-    if (result.status !== "unmatched") return result;
-  }
-  return noExportMatch();
-};
-
-const resolveExportContexts = (value, label, workspacePath, problems) => {
-  const runtime = resolveExportTarget(
-    value,
-    label,
-    workspacePath,
-    RUNTIME_EXPORT_CONDITIONS,
-  );
-  const types = resolveExportTarget(
-    value,
-    label,
-    workspacePath,
-    TYPE_EXPORT_CONDITIONS,
-  );
-  const resolutionProblems = new Set([...runtime.problems, ...types.problems]);
-  problems.push(...resolutionProblems);
-  const runtimeTargets = runtime.status === "resolved" ? runtime.targets : [];
-  const typeTargets = types.status === "resolved" ? types.targets : [];
-  return {
-    runtimeTargets,
-    typeTargets,
-    targets: [...new Set([...runtimeTargets, ...typeTargets])],
-  };
-};
-
-const validatedExportEntries = (exportsField, workspacePath, problems) => {
-  if (exportsField === undefined) {
-    problems.push(
-      formatProblem(workspacePath, "exports", "manifest exports가 없습니다."),
-    );
-    return [];
-  }
-  if (
-    exportsField !== null &&
-    typeof exportsField === "object" &&
-    !Array.isArray(exportsField)
-  ) {
-    const entries = Object.entries(exportsField);
-    const subpathKeys = entries.filter(([key]) => key.startsWith("."));
-    const conditionKeys = entries.filter(([key]) => !key.startsWith("."));
-    if (subpathKeys.length > 0 && conditionKeys.length > 0) {
+    const runtimeExtension = runtimeExtensionOf(value);
+    if (!isSafeDistTarget(value) || runtimeExtension === undefined) {
       problems.push(
         formatProblem(
           workspacePath,
           "exports",
-          "exports에서 subpath key와 condition key를 혼합할 수 없습니다.",
+          `${label} runtime target은 안전한 ./dist/... .js/.mjs/.cjs 경로여야 합니다: ${value}`,
         ),
       );
+      return { runtimeTargets: [], typeTargets: [], targets: [] };
     }
-    if (subpathKeys.length > 0) {
-      return subpathKeys.map(([subpath, value]) => {
-        if (subpath !== "." && !subpath.startsWith("./")) {
-          problems.push(
-            formatProblem(
-              workspacePath,
-              "exports",
-              `유효하지 않은 subpath key입니다: ${subpath}`,
-            ),
-          );
-        }
-        return [subpath, value];
-      });
-    }
+    return { runtimeTargets: [value], typeTargets: [], targets: [value] };
   }
 
-  return [[".", exportsField]];
+  if (!isPlainObject(value)) {
+    problems.push(
+      formatProblem(
+        workspacePath,
+        "exports",
+        `${label} value는 runtime 문자열 또는 정확한 { types, import } 객체여야 합니다: ${formatExportValue(value)}`,
+      ),
+    );
+    return { runtimeTargets: [], typeTargets: [], targets: [] };
+  }
+
+  const keys = Object.keys(value);
+  if (
+    keys.length !== SUPPORTED_EXPORT_CONDITIONS.length ||
+    keys.some((key, index) => key !== SUPPORTED_EXPORT_CONDITIONS[index])
+  ) {
+    problems.push(
+      formatProblem(
+        workspacePath,
+        "exports",
+        `${label} condition key 순서는 types, import여야 합니다: ${keys.join(", ")}`,
+      ),
+    );
+    return { runtimeTargets: [], typeTargets: [], targets: [] };
+  }
+
+  const runtimeTarget = value.import;
+  const runtimeExtension = runtimeExtensionOf(runtimeTarget);
+  const runtimeValid =
+    isSafeDistTarget(runtimeTarget) && runtimeExtension !== undefined;
+  if (!runtimeValid) {
+    problems.push(
+      formatProblem(
+        workspacePath,
+        "exports",
+        `${label}.import target은 안전한 ./dist/... .js/.mjs/.cjs 경로여야 합니다: ${formatExportValue(runtimeTarget)}`,
+      ),
+    );
+  }
+
+  const typeTarget = value.types;
+  const declarationExtension = declarationExtensionFor(runtimeExtension);
+  const typeTargetIsDeclaration =
+    isSafeDistTarget(typeTarget) && /\.d\.(?:mts|cts|ts)$/u.test(typeTarget);
+  if (!typeTargetIsDeclaration) {
+    problems.push(
+      formatProblem(
+        workspacePath,
+        "exports",
+        `${label}.types target은 안전한 ./dist/... declaration 경로여야 합니다: ${formatExportValue(typeTarget)}`,
+      ),
+    );
+  } else if (
+    declarationExtension !== undefined &&
+    !typeTarget.endsWith(declarationExtension)
+  ) {
+    problems.push(
+      formatProblem(
+        workspacePath,
+        "exports",
+        `${label}.types target 확장자는 import target과 대응해야 합니다: ${typeTarget}`,
+      ),
+    );
+  }
+
+  const runtimeTargets = runtimeValid ? [runtimeTarget] : [];
+  const typeTargets = typeTargetIsDeclaration ? [typeTarget] : [];
+  return {
+    runtimeTargets,
+    typeTargets,
+    targets: [...typeTargets, ...runtimeTargets],
+  };
+};
+
+const validatedExportEntries = (exportsField, workspacePath, problems) => {
+  if (
+    !isPlainObject(exportsField) ||
+    !Object.hasOwn(exportsField, ".") ||
+    Object.keys(exportsField).some((key) => key !== "." && !key.startsWith("."))
+  ) {
+    problems.push(
+      formatProblem(
+        workspacePath,
+        "exports",
+        'exports는 "." root를 포함한 subpath map이어야 합니다.',
+      ),
+    );
+    return [];
+  }
+  const entries = [];
+  for (const [subpath, value] of Object.entries(exportsField)) {
+    if (!isSafeSubpathKey(subpath)) {
+      problems.push(
+        formatProblem(
+          workspacePath,
+          "exports",
+          `지원하지 않는 subpath key입니다: ${JSON.stringify(subpath)}`,
+        ),
+      );
+      continue;
+    }
+    const label = `exports[${JSON.stringify(subpath)}]`;
+    entries.push([
+      subpath,
+      validateExportValue(value, label, workspacePath, problems),
+    ]);
+  }
+  return entries;
 };
 
 const declarationFor = (runtimePath) =>
@@ -483,34 +458,11 @@ const validatePackage = async ({
     }
   }
 
-  const exportEntries = validatedExportEntries(
+  const exports = validatedExportEntries(
     manifest.exports,
     workspacePath,
     problems,
   );
-  const exports = exportEntries.map(([subpath, value]) => [
-    subpath,
-    resolveExportContexts(
-      value,
-      subpath === "." ? "exports" : `exports[${JSON.stringify(subpath)}]`,
-      workspacePath,
-      problems,
-    ),
-  ]);
-  const rootExport = exports.find(([subpath]) => subpath === ".");
-  const rootRuntimes =
-    rootExport === undefined
-      ? []
-      : targetsMatching(rootExport[1].runtimeTargets, /\.(?:mjs|cjs|js)$/u);
-  if (rootRuntimes.length === 0) {
-    problems.push(
-      formatProblem(
-        workspacePath,
-        "exports",
-        "사용 가능한 root export가 없습니다.",
-      ),
-    );
-  }
   for (const [subpath, { targets, runtimeTargets, typeTargets }] of exports) {
     for (const target of targets) {
       if (!packed.has(normalizeArtifactPath(target))) {
@@ -677,7 +629,7 @@ const validatePackage = async ({
           ),
         );
       }
-      if (/^(?:~(?:[\\/]|$)|\.{1,2}[\\/]|[\\/]|[A-Za-z]:)/u.test(spec)) {
+      if (/^(?:~[\\/]|\.{1,2}[\\/]|[\\/]|[A-Za-z]:)/u.test(spec)) {
         problems.push(
           formatProblem(
             workspacePath,
@@ -709,7 +661,9 @@ export const checkPublicWorkspacePackages = async ({
 } = {}) => {
   const workspaces = await discoverWorkspacePackages(repoRoot);
   const publicPackages = workspaces.filter(
-    ({ manifest }) => manifest.private !== true,
+    ({ manifest }) =>
+      manifest.private !== true &&
+      !EXCLUDED_LEGACY_PUBLIC_PACKAGES.has(manifest.name),
   );
   const privateWorkspaceNames = new Set(
     workspaces

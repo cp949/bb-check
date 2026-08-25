@@ -103,7 +103,7 @@ test("모든 공개 workspace를 workspace path 순서로 발견한다", async (
   await writePackage(
     root,
     "packages/zeta",
-    publicManifest("@fixture/zeta", "./dist/index.js"),
+    publicManifest("@fixture/zeta", { ".": "./dist/index.js" }),
   );
   await writePackage(root, "apps/private", {
     name: "private-fixture",
@@ -112,7 +112,7 @@ test("모든 공개 workspace를 workspace path 순서로 발견한다", async (
   await writePackage(
     root,
     "apps/alpha",
-    publicManifest("@fixture/alpha", "./dist/index.js"),
+    publicManifest("@fixture/alpha", { ".": "./dist/index.js" }),
   );
 
   const packages = await discoverPublicWorkspacePackages(root);
@@ -171,9 +171,7 @@ test("각 공개 package의 files, exports, declaration, sourcemap을 독립 검
         ".": {
           types: "./dist/index.d.ts",
           import: "./dist/index.js",
-          development: null,
         },
-        "./fallback": [null, "./dist/index.js"],
       }),
       files: ["dist", "README.md", "LICENSE", "package.json"],
     },
@@ -231,7 +229,7 @@ test("각 공개 package의 files, exports, declaration, sourcemap을 독립 검
   assert.match(result.problems.join("\n"), /packages\/broken.*\[exports\]/u);
   assert.match(
     result.problems.join("\n"),
-    /packages\/broken.*invalid export target type/u,
+    /packages\/broken.*condition key 순서는 types, import/u,
   );
   assert.match(
     result.problems.join("\n"),
@@ -265,7 +263,7 @@ test("각 공개 package의 files, exports, declaration, sourcemap을 독립 검
   assert.doesNotMatch(result.problems.join("\n"), /packages\/complete/u);
 });
 
-test("exports의 subpath key와 condition key를 섞으면 거부한다", async () => {
+test("exports top-level condition map은 저장소 공개 스키마로 거부한다", async () => {
   const root = await createRepo();
   await writePackage(
     root,
@@ -293,21 +291,25 @@ test("exports의 subpath key와 condition key를 섞으면 거부한다", async 
     ],
   });
 
-  assert.match(result.problems.join("\n"), /subpath.*condition.*혼합/u);
+  assert.match(
+    result.problems.join("\n"),
+    /exports는 "\." root를 포함한 subpath map이어야 합니다/u,
+  );
 });
 
-const checkExports = async (
-  exports,
-  { declarationPath = "dist/index.d.ts" } = {},
-) => {
+const checkExports = async (exports, { artifacts = {} } = {}) => {
   const root = await createRepo();
+  const exportArtifacts = {
+    "dist/index.js": "export const value = 1;\n",
+    "dist/index.d.ts": "export declare const value: 1;\n",
+    ...artifacts,
+  };
   await writePackage(
     root,
     "packages/export-fixture",
     publicManifest("@fixture/exports", exports),
     {
-      "dist/index.js": "export const value = 1;\n",
-      [declarationPath]: "export declare const value: 1;\n",
+      ...exportArtifacts,
       "README.md": "# exports fixture\n",
       LICENSE: "fixture license\n",
     },
@@ -318,91 +320,51 @@ const checkExports = async (
       "package.json",
       "README.md",
       "LICENSE",
-      "dist/index.js",
-      declarationPath,
+      ...Object.keys(exportArtifacts),
     ],
   });
 };
 
-const importActualNodePackage = async (exports) => {
-  const root = await createRepo();
-  await writePackage(
-    root,
-    "node_modules/actual-exports-fixture",
-    {
-      name: "actual-exports-fixture",
-      version: "0.0.0",
-      type: "module",
-      exports,
-    },
-    {
-      "dist/index.js": 'export const marker = "actual-node-runtime";\n',
-      "dist/types.d.ts": "export declare const marker: string;\n",
-    },
-  );
-  return spawnSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      'const loaded = await import("actual-exports-fixture"); process.stdout.write(loaded.marker);',
-    ],
-    { cwd: root, encoding: "utf8" },
-  );
-};
-
-test("Node exports의 유효한 root, condition, subpath, array/null fallback을 허용한다", async () => {
+test("지원 스키마의 root/subpath 문자열과 정확한 types/import 쌍을 허용한다", async () => {
   const cases = [
-    ["root string", "./dist/index.js"],
+    ["safe string exports", { ".": "./dist/index.js" }, {}],
     [
-      "root condition",
-      { types: "./dist/index.d.ts", import: "./dist/index.js" },
+      "next-webpack-baseline condition exports",
+      {
+        ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+      },
+      {},
     ],
-    ["root array fallback", [null, "./dist/index.js"]],
     [
-      "subpath map",
+      "safe subpath map",
       {
         ".": "./dist/index.js",
-        "./disabled": null,
-        "./fallback": [42, "./dist/index.js"],
+        "./feature": "./dist/index.js",
+      },
+      {},
+    ],
+    [
+      "mjs declaration pair",
+      {
+        ".": { types: "./dist/module.d.mts", import: "./dist/module.mjs" },
+      },
+      {
+        "dist/module.mjs": "export const value = 1;\n",
+        "dist/module.d.mts": "export declare const value: 1;\n",
+      },
+    ],
+    [
+      "cjs conventional declaration",
+      { ".": "./dist/module.cjs" },
+      {
+        "dist/module.cjs": "exports.value = 1;\n",
+        "dist/module.d.cts": "export declare const value: 1;\n",
       },
     ],
   ];
 
-  for (const [name, exports] of cases) {
-    const result = await checkExports(exports);
-    assert.doesNotMatch(
-      result.problems.join("\n"),
-      /\[exports\]/u,
-      `${name}: ${result.problems.join("\n")}`,
-    );
-  }
-});
-
-test("실제 Node가 건너뛰는 invalid/unmatched array 대안을 checker도 fallback 처리한다", async () => {
-  const cases = [
-    ["outside target", ["../outside.js", "./dist/index.js"]],
-    ["node_modules target", ["./node_modules/x", "./dist/index.js"]],
-    ["primitive target", [42, "./dist/index.js"]],
-    [
-      "types-only condition",
-      [{ types: "./dist/types.d.ts" }, "./dist/index.js"],
-    ],
-  ];
-
-  for (const [name, exports] of cases) {
-    const imported = await importActualNodePackage(exports);
-    assert.equal(
-      imported.status,
-      0,
-      `${name}: stdout=${imported.stdout} stderr=${imported.stderr}`,
-    );
-    assert.equal(imported.stdout, "actual-node-runtime", name);
-
-    const result = await checkExports(exports, {
-      declarationPath:
-        name === "types-only condition" ? "dist/types.d.ts" : "dist/index.d.ts",
-    });
+  for (const [name, exports, artifacts] of cases) {
+    const result = await checkExports(exports, { artifacts });
     assert.doesNotMatch(
       result.problems.join("\n"),
       /\[(?:exports|declaration)\]/u,
@@ -411,37 +373,71 @@ test("실제 Node가 건너뛰는 invalid/unmatched array 대안을 checker도 f
   }
 });
 
-test("공개 root가 없거나 Node exports key/target이 잘못된 형태를 거부한다", async () => {
+test("삭제 예정 @cp949/bb-check package는 공개 검증 대상에서 제외한다", async () => {
+  const root = await createRepo();
+  await writePackage(root, "packages/bb-check", {
+    ...publicManifest("@cp949/bb-check", null),
+  });
+  await writePackage(
+    root,
+    "packages/next-webpack-baseline",
+    publicManifest("@cp949/next-webpack-baseline", {
+      ".": {
+        types: "./dist/index.d.ts",
+        import: "./dist/index.js",
+      },
+    }),
+    {
+      "dist/index.js": "export const value = 1;\n",
+      "dist/index.d.ts": "export declare const value: 1;\n",
+      "README.md": "# active package\n",
+      LICENSE: "fixture license\n",
+    },
+  );
+
+  const visited = [];
+  const result = await checkPublicWorkspacePackages({
+    repoRoot: root,
+    readPackFiles: async ({ manifest }) => {
+      visited.push(manifest.name);
+      return [
+        "package.json",
+        "README.md",
+        "LICENSE",
+        "dist/index.js",
+        "dist/index.d.ts",
+      ];
+    },
+  });
+
+  assert.deepEqual(visited, ["@cp949/next-webpack-baseline"]);
+  assert.deepEqual(result.workspacePaths, ["packages/next-webpack-baseline"]);
+  assert.deepEqual(result.problems, []);
+});
+
+test("top-level과 subpath value의 지원하지 않는 exports 형상을 fail-closed로 거부한다", async () => {
   const cases = [
-    ["empty root", {}, /사용 가능한 root export/u],
-    ["null root", null, /사용 가능한 root export/u],
-    ["null dot root", { ".": null }, /사용 가능한 root export/u],
+    ["top-level string", "./dist/index.js", /subpath map/u],
+    ["top-level array", ["./dist/index.js"], /subpath map/u],
+    ["top-level null", null, /subpath map/u],
+    ["empty map", {}, /subpath map/u],
+    ["missing root", { "./feature": "./dist/index.js" }, /subpath map/u],
+    ["subpath array", { ".": ["./dist/index.js"] }, /runtime 문자열/u],
+    ["subpath null", { ".": null }, /runtime 문자열/u],
     [
-      "subpath only",
-      { "./feature": "./dist/index.js" },
-      /사용 가능한 root export/u,
+      "nested condition",
+      {
+        ".": {
+          types: "./dist/index.d.ts",
+          import: { node: "./dist/index.js" },
+        },
+      },
+      /import target/u,
     ],
-    ["invalid subpath", { ".foo": "./dist/index.js" }, /subpath key/u],
     [
       "integer condition",
-      { 0: "./dist/index.js", default: "./dist/index.js" },
-      /integer condition key/u,
-    ],
-    [
-      "direct invalid condition target",
-      { import: 42, default: "./dist/index.js" },
-      /invalid export target type/u,
-    ],
-    [
-      "selected invalid condition path",
-      { import: "../outside.js", default: "./dist/index.js" },
-      /package 상대 경로|invalid export target/u,
-    ],
-    ["invalid-only array", [42], /invalid export target type/u],
-    [
-      "types-only missing runtime",
-      [{ types: "./dist/index.d.ts" }],
-      /사용 가능한 root export/u,
+      { ".": { 0: "./dist/index.js", import: "./dist/index.js" } },
+      /condition key 순서는 types, import/u,
     ],
   ];
 
@@ -455,46 +451,117 @@ test("공개 root가 없거나 Node exports key/target이 잘못된 형태를 �
   }
 });
 
-test("Node의 canonical array-index condition 경계만 거부한다", async () => {
-  for (const key of ["0", "4294967294"]) {
-    const exports = { [key]: "./dist/index.js", default: "./dist/index.js" };
-    const imported = await importActualNodePackage(exports);
-    assert.notEqual(imported.status, 0, key);
-    assert.match(imported.stderr, /ERR_INVALID_PACKAGE_CONFIG/u, key);
-
-    const result = await checkExports(exports);
-    assert.match(result.problems.join("\n"), /integer condition key/u, key);
+test("custom condition과 types/import key 누락·추가·역순을 거부한다", async () => {
+  const unsupportedConditions = [
+    "node-addons",
+    "module-sync",
+    "types@>=5",
+    "default",
+    "browser",
+  ];
+  for (const condition of unsupportedConditions) {
+    const result = await checkExports({
+      ".": {
+        types: "./dist/index.d.ts",
+        import: "./dist/index.js",
+        [condition]: "./dist/index.js",
+      },
+    });
+    assert.match(
+      result.problems.join("\n"),
+      /condition key 순서는 types, import/u,
+      condition,
+    );
   }
 
-  for (const key of ["4294967295", "4294967296", "01", "1.0", "-1"]) {
-    const exports = {
-      [key]: "./dist/not-selected.js",
-      default: "./dist/index.js",
-    };
-    const imported = await importActualNodePackage(exports);
-    assert.equal(
-      imported.status,
-      0,
-      `${key}: stdout=${imported.stdout} stderr=${imported.stderr}`,
-    );
-    assert.equal(imported.stdout, "actual-node-runtime", key);
-
-    const result = await checkExports(exports);
-    assert.doesNotMatch(
+  for (const [name, value] of [
+    ["types only", { types: "./dist/index.d.ts" }],
+    ["import only", { import: "./dist/index.js" }],
+    [
+      "reverse order",
+      { import: "./dist/index.js", types: "./dist/index.d.ts" },
+    ],
+  ]) {
+    const result = await checkExports({ ".": value });
+    assert.match(
       result.problems.join("\n"),
-      /\[exports\]/u,
+      /condition key 순서는 types, import/u,
+      name,
+    );
+  }
+});
+
+test("unsafe subpath key를 안정적인 exports 진단으로 거부한다", async () => {
+  const keys = [
+    ".foo",
+    "./",
+    "./feature/*",
+    "./feature\\child",
+    "./feature%2Fchild",
+    "./feature/./child",
+    "./feature/../child",
+    "./node_modules/child",
+  ];
+
+  for (const key of keys) {
+    const result = await checkExports({
+      ".": "./dist/index.js",
+      [key]: "./dist/index.js",
+    });
+    assert.ok(
+      result.problems
+        .join("\n")
+        .includes(`지원하지 않는 subpath key입니다: ${JSON.stringify(key)}`),
       `${key}: ${result.problems.join("\n")}`,
     );
   }
 });
 
-test("검증 대상이 아닌 condition의 invalid target은 선택하지 않는다", async () => {
-  const result = await checkExports({
-    browser: 42,
-    default: "./dist/index.js",
-  });
+test("runtime과 declaration target을 ./dist 안전 경로와 대응 확장자로 제한한다", async () => {
+  const unsafeRuntimeTargets = [
+    "dist/index.js",
+    "../dist/index.js",
+    "/dist/index.js",
+    "https://example.test/index.js",
+    "./src/index.js",
+    "./dist\\index.js",
+    "./dist/%69ndex.js",
+    "./dist/./index.js",
+    "./dist/../index.js",
+    "./dist/node_modules/pkg/index.js",
+    "./dist/*.js",
+    "./dist/index.ts",
+  ];
+  for (const target of unsafeRuntimeTargets) {
+    const result = await checkExports({ ".": target });
+    assert.match(result.problems.join("\n"), /runtime target/u, target);
+  }
 
-  assert.doesNotMatch(result.problems.join("\n"), /\[exports\]/u);
+  for (const [name, value, expected] of [
+    [
+      "types runtime extension",
+      { types: "./dist/index.js", import: "./dist/index.js" },
+      /types target/u,
+    ],
+    [
+      "import declaration extension",
+      { types: "./dist/index.d.ts", import: "./dist/index.d.ts" },
+      /import target/u,
+    ],
+    [
+      "mismatched declaration extension",
+      { types: "./dist/index.d.mts", import: "./dist/index.js" },
+      /types target 확장자/u,
+    ],
+    [
+      "unsafe declaration path",
+      { types: "./types/index.d.ts", import: "./dist/index.js" },
+      /types target/u,
+    ],
+  ]) {
+    const result = await checkExports({ ".": value });
+    assert.match(result.problems.join("\n"), expected, name);
+  }
 });
 
 test("dependency 필드의 prefix 없는 POSIX와 Windows local path를 거부한다", async () => {
@@ -503,7 +570,9 @@ test("dependency 필드의 prefix 없는 POSIX와 Windows local path를 거부�
     root,
     "packages/local-dependencies",
     {
-      ...publicManifest("@fixture/local-dependencies", "./dist/index.js"),
+      ...publicManifest("@fixture/local-dependencies", {
+        ".": "./dist/index.js",
+      }),
       dependencies: {
         parentRelative: "../local",
         currentRelative: "./local",
@@ -518,6 +587,7 @@ test("dependency 필드의 prefix 없는 POSIX와 Windows local path를 거부�
       optionalDependencies: {
         windowsDriveAbsolute: "C:\\local",
         windowsDriveRelative: "C:local",
+        homeWindowsPath: "~\\local",
       },
     },
     {
@@ -548,22 +618,19 @@ test("dependency 필드의 prefix 없는 POSIX와 Windows local path를 거부�
     "windowsUnc",
     "windowsDriveAbsolute",
     "windowsDriveRelative",
-    "homeShorthand",
     "homePath",
+    "homeWindowsPath",
   ]) {
     assert.match(problems, new RegExp(`${dependency}.*local path`, "u"));
   }
+  assert.doesNotMatch(problems, /homeShorthand.*local path/u);
 });
 
-test("두 공개 package의 generated LICENSE는 Git ignore 대상이다", () => {
+test("next-webpack-baseline generated LICENSE는 Git ignore 대상이다", () => {
   const repoRoot = new URL("..", import.meta.url);
-  for (const path of [
-    "packages/bb-check/LICENSE",
-    "packages/next-webpack-baseline/LICENSE",
-  ]) {
-    const result = spawnSync("git", ["check-ignore", "-q", path], {
-      cwd: repoRoot,
-    });
-    assert.equal(result.status, 0, `${path}가 ignore되지 않았다.`);
-  }
+  const path = "packages/next-webpack-baseline/LICENSE";
+  const result = spawnSync("git", ["check-ignore", "-q", path], {
+    cwd: repoRoot,
+  });
+  assert.equal(result.status, 0, `${path}가 ignore되지 않았다.`);
 });
