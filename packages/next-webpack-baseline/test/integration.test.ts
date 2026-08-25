@@ -1,75 +1,152 @@
-import { rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { beforeAll, describe, expect, it } from "vitest";
 
-const workspaceRoot = resolve(import.meta.dirname, "../../..");
+const testDir = fileURLToPath(new URL(".", import.meta.url));
+const workspaceRoot = resolve(testDir, "../../..");
 const fixtureDir = resolve(workspaceRoot, "apps/next-pages-fixture");
+const childTimeoutMs = 90_000;
 
 interface BuildResult {
   readonly status: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly error: Error | undefined;
   readonly output: string;
 }
 
-const buildFixture = (fixtureCase: string): BuildResult => {
-  rmSync(resolve(fixtureDir, ".next"), { recursive: true, force: true });
+const npmExecPathFrom = (env: NodeJS.ProcessEnv): string => {
+  const npmExecPath = env.npm_execpath;
+  if (typeof npmExecPath !== "string" || npmExecPath.trim() === "") {
+    throw new Error("NWB_TEST_NPM_EXECPATH_MISSING");
+  }
+  return npmExecPath;
+};
+
+const runNpm = (
+  args: readonly string[],
+  options: { readonly env: NodeJS.ProcessEnv; readonly timeout: number },
+): BuildResult => {
   const result = spawnSync(
-    "npm",
-    ["run", "build", "--workspace=next-pages-fixture", "--", "--webpack"],
+    process.execPath,
+    [npmExecPathFrom(options.env), ...args],
     {
       cwd: workspaceRoot,
       encoding: "utf8",
-      env: { ...process.env, NWB_FIXTURE_CASE: fixtureCase },
-      timeout: 120_000,
+      env: options.env,
+      timeout: options.timeout,
     },
   );
   return {
     status: result.status,
+    signal: result.signal,
+    error: result.error,
     output: `${result.stdout}${result.stderr}`,
   };
 };
 
-beforeAll(() => {
-  const result = spawnSync(
-    "npm",
-    ["run", "build", "--workspace=@cp949/next-webpack-baseline"],
-    { cwd: workspaceRoot, encoding: "utf8", timeout: 120_000 },
+const buildFixture = (fixtureCase: string): BuildResult => {
+  rmSync(resolve(fixtureDir, ".next"), { recursive: true, force: true });
+  return runNpm(
+    ["run", "build", "--workspace=next-pages-fixture", "--", "--webpack"],
+    {
+      env: { ...process.env, NWB_FIXTURE_CASE: fixtureCase },
+      timeout: childTimeoutMs,
+    },
   );
-  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-}, 120_000);
+};
+
+const expectCompleted = (result: BuildResult): void => {
+  expect(result.error, result.output).toBeUndefined();
+  expect(result.signal, result.output).toBeNull();
+  expect(result.status, result.output).not.toBeNull();
+};
+
+const readArtifactTree = (root: string): string => {
+  if (!existsSync(root)) return "";
+  const paths: string[] = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    if (directory === undefined) continue;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = resolve(directory, entry.name);
+      if (entry.isDirectory()) pending.push(path);
+      else if (entry.isFile() && /\.(?:js|json)$/u.test(entry.name)) {
+        paths.push(path);
+      }
+    }
+  }
+  return paths
+    .sort()
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+};
+
+beforeAll(() => {
+  const result = runNpm(
+    ["run", "build", "--workspace=@cp949/next-webpack-baseline"],
+    { env: process.env, timeout: childTimeoutMs },
+  );
+  expectCompleted(result);
+  expect(result.status, result.output).toBe(0);
+}, 110_000);
 
 describe.sequential("Next.js Pages Router Webpack integration", () => {
+  it("npm_execpath가 없으면 shell fallback 없이 안정된 infrastructure 오류로 중단한다", () => {
+    expect(() => npmExecPathFrom({})).toThrow("NWB_TEST_NPM_EXECPATH_MISSING");
+  });
+
   it("정책 밖 client package는 plugin이 활성화되어도 빌드를 막지 않는다", () => {
     const result = buildFixture("control");
 
+    expectCompleted(result);
     expect(result.status, result.output).toBe(0);
-  }, 120_000);
+  }, 110_000);
 
   it("정책 package를 transpile하지 않으면 실제 client build를 차단한다", () => {
     const result = buildFixture("red");
 
-    expect(result.status).not.toBe(0);
+    expectCompleted(result);
+    expect(result.status).toBe(1);
     expect(result.output).toContain("NWB_SYNTAX_UNSUPPORTED");
-  }, 120_000);
+  }, 110_000);
 
   it("정책 package를 transpilePackages에 합성하면 같은 build가 통과한다", () => {
     const result = buildFixture("green");
 
+    expectCompleted(result);
     expect(result.status, result.output).toBe(0);
-  }, 120_000);
+  }, 110_000);
 
   it("정확한 entrypoint waiver만 호환성 예외로 인정한다", () => {
     const exact = buildFixture("waiver-exact");
     const similarPrefix = buildFixture("waiver-prefix");
 
+    expectCompleted(exact);
     expect(exact.status, exact.output).toBe(0);
-    expect(similarPrefix.status).not.toBe(0);
+    expect(
+      exact.output.match(/waiver applied: syntax-fixture\/index\.js/gu),
+    ).toHaveLength(1);
+    expectCompleted(similarPrefix);
+    expect(similarPrefix.status).toBe(1);
     expect(similarPrefix.output).toContain("NWB_SYNTAX_UNSUPPORTED");
-  }, 120_000);
+  }, 200_000);
 
   it("getServerSideProps에서만 사용하는 package는 client verdict에서 제외한다", () => {
     const result = buildFixture("server-only");
 
+    expectCompleted(result);
     expect(result.status, result.output).toBe(0);
-  }, 120_000);
+    const serverArtifacts = readArtifactTree(
+      resolve(fixtureDir, ".next/server"),
+    );
+    const clientArtifacts = readArtifactTree(
+      resolve(fixtureDir, ".next/static/chunks/pages"),
+    );
+    expect(serverArtifacts).toContain("syntax-fixture/server");
+    expect(clientArtifacts).not.toContain("syntax fixture");
+    expect(clientArtifacts).not.toContain("readFixture");
+  }, 110_000);
 });

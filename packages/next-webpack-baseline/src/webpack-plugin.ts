@@ -56,11 +56,17 @@ interface WebpackCompilation {
   readonly entrypoints: WebpackEntrypoints;
   readonly hooks: { readonly afterSeal: AfterSealHook };
   readonly errors: Error[];
+  readonly warnings: Error[];
 }
 
 interface PendingError {
   readonly sortKey: string;
   readonly error: NextWebpackBaselineError;
+}
+
+interface PendingWarning {
+  readonly sortKey: string;
+  readonly warning: Error;
 }
 
 const isObject = (value: unknown): value is Record<PropertyKey, unknown> =>
@@ -213,6 +219,10 @@ const readCompilation = (value: unknown): WebpackCompilation => {
     if (!Array.isArray(errors)) {
       return unsupportedWebpack("compilation errors를 사용할 수 없습니다.");
     }
+    const warnings = value.warnings;
+    if (!Array.isArray(warnings)) {
+      return unsupportedWebpack("compilation warnings를 사용할 수 없습니다.");
+    }
 
     return {
       modules: moduleSnapshot,
@@ -228,6 +238,7 @@ const readCompilation = (value: unknown): WebpackCompilation => {
         },
       },
       errors,
+      warnings,
     };
   } catch (cause) {
     if (cause instanceof NextWebpackBaselineError) throw cause;
@@ -432,6 +443,16 @@ const createSourceUnavailableError = (
     `${packageName}/${entrypoint}: loader 처리 후 JavaScript source를 읽을 수 없습니다.`,
   );
 
+const createWaiverWarning = (
+  packageName: string,
+  entrypoint: string,
+): Error => {
+  const warning = new Error(`waiver applied: ${packageName}/${entrypoint}`);
+  warning.name = "NextWebpackBaselineWaiverWarning";
+  warning.stack = `${warning.name}: ${warning.message}`;
+  return warning;
+};
+
 const inspectCompilation = (
   compilation: WebpackCompilation,
   input: WebpackPluginInput,
@@ -440,6 +461,7 @@ const inspectCompilation = (
   const analyzed = new Set<string>();
   const unavailableSources = new Set<string>();
   const pending: PendingError[] = [];
+  const waiverWarnings = new Map<string, PendingWarning>();
 
   for (const module of compilation.modules) {
     const chunks = readModuleChunks(compilation.chunkGraph, module);
@@ -497,6 +519,19 @@ const inspectCompilation = (
         syntax: analyzeSyntax(source, input.baseline),
         isClientEntryReachable,
       });
+      if (verdict.status === "waived" && verdict.resource !== undefined) {
+        const warningKey = `${verdict.resource.package}\u0000${verdict.resource.entrypoint}`;
+        if (!waiverWarnings.has(warningKey)) {
+          waiverWarnings.set(warningKey, {
+            sortKey: warningKey,
+            warning: createWaiverWarning(
+              verdict.resource.package,
+              verdict.resource.entrypoint,
+            ),
+          });
+        }
+        continue;
+      }
       if (verdict.status !== "fail" || verdict.resource === undefined) continue;
 
       for (const diagnostic of verdict.diagnostics) {
@@ -523,10 +558,17 @@ const inspectCompilation = (
   pending.sort((left, right) =>
     left.sortKey < right.sortKey ? -1 : left.sortKey > right.sortKey ? 1 : 0,
   );
-  withinWebpackBoundary("compilation errors를 갱신할 수 없습니다.", () => {
+  const sortedWarnings = [...waiverWarnings.values()].sort((left, right) =>
+    left.sortKey < right.sortKey ? -1 : left.sortKey > right.sortKey ? 1 : 0,
+  );
+  withinWebpackBoundary("compilation 결과를 갱신할 수 없습니다.", () => {
     Array.prototype.push.call(
       compilation.errors,
       ...pending.map(({ error }) => error),
+    );
+    Array.prototype.push.call(
+      compilation.warnings,
+      ...sortedWarnings.map(({ warning }) => warning),
     );
   });
 };

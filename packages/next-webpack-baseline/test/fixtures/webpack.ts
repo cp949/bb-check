@@ -89,6 +89,7 @@ export interface WebpackCompilationDouble {
   readonly entrypoints: WebpackEntrypointsDouble;
   readonly hooks: { readonly afterSeal: VoidSyncHook };
   readonly errors: Error[];
+  readonly warnings: Error[];
 }
 
 export interface WebpackCompilerDouble {
@@ -290,6 +291,7 @@ export const createWebpackFixture = ({
     entrypoints: exposedEntrypoints,
     hooks: { afterSeal },
     errors: [],
+    warnings: [],
   };
   const compilationHook = createSyncHook<WebpackCompilationDouble>();
   const compiler: WebpackCompilerDouble = {

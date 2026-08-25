@@ -76,6 +76,61 @@ const expectStableWebpackShapeError = (operation: () => unknown): void => {
 };
 
 describe("createWebpackPlugin", () => {
+  it("사용된 exact waiver를 package-relative warning으로 중복 제거해 정렬한다", () => {
+    const waivedConfig: NormalizedConfig = {
+      ...config,
+      waiversByPackage: new Map([
+        [
+          "legacy-widget",
+          [
+            {
+              package: "legacy-widget",
+              reason: "must not leak this reason",
+              allowedEntrypoints: ["dist/z.js", "dist/a.js"],
+            },
+          ],
+        ],
+      ]),
+    };
+    const duplicate = pageModule(
+      "dist/z.js",
+      "const value = input?.value ?? fallback;",
+    );
+    const fixture = createWebpackFixture({
+      modules: [
+        duplicate,
+        { ...duplicate },
+        pageModule("dist/a.js", "const value = input?.value;"),
+      ],
+    });
+    createWebpackPlugin(
+      { config: waivedConfig, baseline: baselineFor() },
+      { dev: false },
+    ).apply(fixture.compiler);
+
+    expect(fixture.run()).toEqual([]);
+    expect(
+      fixture.compilation.warnings.map((warning) => ({
+        name: warning.name,
+        message: warning.message,
+        stack: warning.stack,
+      })),
+    ).toEqual([
+      {
+        name: "NextWebpackBaselineWaiverWarning",
+        message: "waiver applied: legacy-widget/dist/a.js",
+        stack:
+          "NextWebpackBaselineWaiverWarning: waiver applied: legacy-widget/dist/a.js",
+      },
+      {
+        name: "NextWebpackBaselineWaiverWarning",
+        message: "waiver applied: legacy-widget/dist/z.js",
+        stack:
+          "NextWebpackBaselineWaiverWarning: waiver applied: legacy-widget/dist/z.js",
+      },
+    ]);
+  });
+
   it("chunkGraph가 afterSeal 직전에 준비되는 Webpack lifecycle을 지원한다", () => {
     const fixture = createWebpackFixture({
       chunkGraphTiming: "after-seal",

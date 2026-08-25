@@ -2,6 +2,9 @@ import {
   createNextWebpackBaseline,
   defineConfig,
 } from "@cp949/next-webpack-baseline";
+import { fileURLToPath } from "node:url";
+
+const fixtureDir = fileURLToPath(new URL(".", import.meta.url));
 
 const fixtureCase = process.env.NWB_FIXTURE_CASE ?? "green";
 const supportedCases = new Set([
@@ -27,7 +30,7 @@ const allowedEntrypoints =
 
 const baseline = createNextWebpackBaseline(
   defineConfig({
-    projectDir: import.meta.dirname,
+    projectDir: fixtureDir,
     policy: hasPolicy
       ? [
           {
@@ -51,13 +54,12 @@ const baseline = createNextWebpackBaseline(
 );
 
 export default {
+  pageExtensions:
+    fixtureCase === "server-only" ? ["server.tsx"] : ["client.tsx"],
   transpilePackages:
     fixtureCase === "green" ? [...baseline.transpilePackages] : [],
   webpack(config, context) {
     config.plugins.push(baseline.webpackPlugin({ dev: context.dev }));
-    if (fixtureCase === "server-only") {
-      config.resolve.alias["syntax-fixture$"] = false;
-    }
     return config;
   },
 };
