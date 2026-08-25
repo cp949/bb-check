@@ -26,6 +26,9 @@ const require = createRequire(import.meta.url);
 const babelPluginSupport = require("@babel/compat-data/plugins") as Readonly<
   Record<string, BrowserSupport>
 >;
+const babelPluginBugfixSupport = require(
+  "@babel/compat-data/plugin-bugfixes",
+) as Readonly<Record<string, BrowserSupport>>;
 
 const COMPAT_DATA_FEATURES: Readonly<Record<SyntaxFeature, string>> = {
   "optional-chaining": "proposal-optional-chaining",
@@ -40,6 +43,9 @@ const COMPAT_DATA_FEATURES: Readonly<Record<SyntaxFeature, string>> = {
 
 const TARGET_BROWSER_NAMES: Readonly<Record<string, string>> = {
   ios_saf: "ios",
+  and_chr: "chrome",
+  and_ff: "firefox",
+  op_mob: "opera_mobile",
 };
 
 const parseTarget = (
@@ -65,10 +71,17 @@ const parseVersion = (
   return [Number(match[1]), Number(match[2] ?? "0")];
 };
 
-const doesNotSupport = (feature: SyntaxFeature, target: string): boolean => {
+/** @internal Browserslist target 하나의 compat-data 지원 여부를 순수하게 계산한다. */
+export const isSyntaxUnsupportedForTarget = (
+  feature: SyntaxFeature,
+  target: string,
+): boolean => {
   const parsed = parseTarget(target);
   if (parsed === undefined) return true;
-  const support = babelPluginSupport[COMPAT_DATA_FEATURES[feature]];
+  const compatFeature = COMPAT_DATA_FEATURES[feature];
+  const support =
+    babelPluginBugfixSupport[compatFeature] ??
+    babelPluginSupport[compatFeature];
   if (support === undefined) return true;
   const browser = TARGET_BROWSER_NAMES[parsed[0]] ?? parsed[0];
   const version = support[browser];
@@ -118,7 +131,9 @@ export const resolveBrowserBaseline = (projectDir: string): BrowserBaseline => {
   const targets = [...new Set(loadedTargets)].sort();
   const unsupportedSyntax = new Set<SyntaxFeature>();
   for (const feature of Object.keys(COMPAT_DATA_FEATURES) as SyntaxFeature[]) {
-    if (targets.some((target) => doesNotSupport(feature, target))) {
+    if (
+      targets.some((target) => isSyntaxUnsupportedForTarget(feature, target))
+    ) {
       unsupportedSyntax.add(feature);
     }
   }

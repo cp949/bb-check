@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveBrowserBaseline } from "../src/baseline.js";
+import {
+  isSyntaxUnsupportedForTarget,
+  resolveBrowserBaseline,
+} from "../src/baseline.js";
 import { NextWebpackBaselineError } from "../src/errors.js";
 
 const packageDir = dirname(fileURLToPath(import.meta.url));
@@ -97,7 +100,27 @@ describe("resolveBrowserBaseline", () => {
     );
   });
 
-  it("compat-data의 Chrome 91 optional chaining 지원 경계를 baseline에 반영한다", async () => {
+  it.each([
+    {
+      target: "chrome 79",
+      unsupportedSyntax: [
+        "logical-assignment-operators",
+        "nullish-coalescing",
+        "optional-chaining",
+        "private-methods",
+      ],
+    },
+    {
+      target: "chrome 80",
+      unsupportedSyntax: ["logical-assignment-operators", "private-methods"],
+    },
+  ] satisfies ReadonlyArray<{
+    target: string;
+    unsupportedSyntax: readonly string[];
+  }>)("compat-data optional chaining 경계 $target을 반영한다", async ({
+    target,
+    unsupportedSyntax,
+  }) => {
     const fixture = await mkdtemp(resolve(tmpdir(), "nwb-compat-data-"));
     temporaryDirs.push(fixture);
     await writeFile(
@@ -105,16 +128,59 @@ describe("resolveBrowserBaseline", () => {
       JSON.stringify({
         name: "compat-data-fixture",
         private: true,
-        browserslist: { production: ["chrome 90"] },
+        browserslist: { production: [target] },
       }),
       "utf8",
     );
 
     const baseline = resolveBrowserBaseline(fixture);
 
-    expect(baseline.targets).toEqual(["chrome 90"]);
-    expect([...baseline.unsupportedSyntax]).toEqual(["optional-chaining"]);
+    expect(baseline.targets).toEqual([target]);
+    expect([...baseline.unsupportedSyntax].sort()).toEqual(unsupportedSyntax);
   });
+
+  it.each([
+    "ios_saf 13.4-13.7",
+    "and_chr 120",
+    "and_ff 120",
+    "op_mob 80",
+  ])(
+    "알려진 Browserslist alias $0의 하한 target을 compat browser로 정규화한다",
+    (target) => {
+      expect(
+        isSyntaxUnsupportedForTarget("optional-chaining", target),
+      ).toBe(false);
+    },
+  );
+
+  it("알 수 없는 Browserslist alias는 fail-closed로 지원하지 않는다고 판정한다", () => {
+    expect(
+      isSyntaxUnsupportedForTarget("optional-chaining", "future_shell 999"),
+    ).toBe(true);
+  });
+
+  it.each(["and_chr 120", "and_ff 120", "op_mob 80"])(
+    "현대 $0 target은 alias 누락 때문에 false block하지 않는다",
+    async (target) => {
+      const fixture = await mkdtemp(resolve(tmpdir(), "nwb-alias-"));
+      temporaryDirs.push(fixture);
+      await writeFile(
+        resolve(fixture, "package.json"),
+        JSON.stringify({
+          name: "alias-fixture",
+          private: true,
+          browserslist: { production: [target] },
+        }),
+        "utf8",
+      );
+
+      expect(() => resolveBrowserBaseline(fixture)).toThrow(
+        expect.objectContaining<Partial<NextWebpackBaselineError>>({
+          code: "NWB_BROWSERSLIST_MODERN_ONLY",
+        }),
+      );
+    },
+  );
 
   it("같은 projectDir의 target 정규화 결과를 안정적으로 유지한다", () => {
     const first = resolveBrowserBaseline(legacyFixture);

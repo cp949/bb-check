@@ -16,6 +16,10 @@ describe("analyzeSyntax", () => {
       source: "const name = account?.profile?.name;",
     },
     {
+      feature: "optional-chaining",
+      source: "const result = load?.();",
+    },
+    {
       feature: "nullish-coalescing",
       source: 'const locale = requestedLocale ?? "ko-KR";',
     },
@@ -24,8 +28,16 @@ describe("analyzeSyntax", () => {
       source: "class Counter { count = 0; }",
     },
     {
-      feature: "private-methods",
+      feature: "class-properties",
       source: 'class Vault { #token = "secret"; }',
+    },
+    {
+      feature: "class-properties",
+      source: "class Registry { static #instance = new Registry(); }",
+    },
+    {
+      feature: "private-methods",
+      source: "class Vault { #readToken() { return \"secret\"; } }",
     },
     {
       feature: "class-properties",
@@ -36,8 +48,20 @@ describe("analyzeSyntax", () => {
       source: "options.enabled ??= true;",
     },
     {
+      feature: "logical-assignment-operators",
+      source: "options.enabled &&= isEnabled();",
+    },
+    {
+      feature: "logical-assignment-operators",
+      source: "options.enabled ||= true;",
+    },
+    {
       feature: "numeric-separator",
       source: "const annualBudget = 1_000_000;",
+    },
+    {
+      feature: "numeric-separator",
+      source: "const identifier = 1_000n;",
     },
     {
       feature: "async-generator-functions",
@@ -75,9 +99,22 @@ describe("analyzeSyntax", () => {
     expect(analysis.diagnostics).toEqual([]);
   });
 
+  it.each([
+    "const [first, ...remaining] = values;",
+    "const copy = [...values];",
+    "class Example { run() {} static create() {} }",
+  ])("object rest/spread 및 class property가 아닌 source는 clean으로 판정한다", (source) => {
+    const analysis = analyzeSyntax(
+      source,
+      baselineFor(["object-rest-spread", "class-properties"]),
+    );
+
+    expect(analysis.diagnostics).toEqual([]);
+  });
+
   it("여러 feature diagnostic을 AST 순회 순서와 무관하게 안정적으로 정렬한다", () => {
     const analysis = analyzeSyntax(
-      'class Vault { #token = account?.token ?? "none"; }',
+      'class Vault { #token() { return account?.token ?? "none"; } }',
       baselineFor([
         "private-methods",
         "nullish-coalescing",
@@ -90,7 +127,12 @@ describe("analyzeSyntax", () => {
     ).toEqual(["optional-chaining", "nullish-coalescing", "private-methods"]);
   });
 
-  it.each(["const score: number = 1;", "const node = <main />;", "const = ;"])(
+  it.each([
+    "const score: number = 1;",
+    "const node = <main />;",
+    "const = ;",
+    "class Vault { #consumerSecret; #consumerSecret; }",
+  ])(
     "loader 후 JavaScript가 아닌 source는 NWB_SYNTAX_PARSE_INCOMPLETE로 중단한다",
     (source) => {
       const analysis = analyzeSyntax(
@@ -99,10 +141,12 @@ describe("analyzeSyntax", () => {
       );
 
       expect(analysis.diagnostics).toEqual([
-        expect.objectContaining({
+        {
           code: "NWB_SYNTAX_PARSE_INCOMPLETE",
-        }),
+          message: "JavaScript source를 완전히 parse할 수 없습니다.",
+        },
       ]);
+      expect(analysis.diagnostics[0]?.message).not.toContain("consumerSecret");
     },
   );
 });

@@ -63,8 +63,10 @@ const collectFromNode = (
     case "ClassProperty":
       detected.add("class-properties");
       break;
-    // private field와 private method는 contract의 private-methods compat key를 공유한다.
+    // private field는 public/static field와 같은 class-properties contract를 사용한다.
     case "ClassPrivateProperty":
+      detected.add("class-properties");
+      break;
     case "ClassPrivateMethod":
       detected.add("private-methods");
       break;
@@ -130,13 +132,12 @@ export const findUnsupportedSyntax = (
   );
 };
 
-const parserIncomplete = (cause: unknown): SyntaxAnalysis => {
-  const detail = cause instanceof Error ? `: ${cause.message}` : "";
+const parserIncomplete = (): SyntaxAnalysis => {
   return {
     diagnostics: [
       {
         code: "NWB_SYNTAX_PARSE_INCOMPLETE",
-        message: `JavaScript source를 완전히 parse할 수 없습니다${detail}`,
+        message: "JavaScript source를 완전히 parse할 수 없습니다.",
       },
     ],
   };
@@ -149,8 +150,8 @@ export const analyzeSyntax = (
   let ast: unknown;
   try {
     ast = parse(source, { sourceType: "unambiguous" });
-  } catch (cause) {
-    return parserIncomplete(cause);
+  } catch {
+    return parserIncomplete();
   }
 
   return {
