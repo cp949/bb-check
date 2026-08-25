@@ -17,7 +17,10 @@ describe("workspace 공개 경계", () => {
 
     const packageRoot =
       await import("../packages/legacy-browser-smoke/src/index.js");
-    expect(Object.keys(packageRoot)).toEqual(["defineSmokeConfig"]);
+    expect(Object.keys(packageRoot)).toEqual([
+      "defineSmokeConfig",
+      "createLegacyBrowserSmoke",
+    ]);
   });
 
   it("next-webpack-baseline은 Track A 공개 package다", async () => {

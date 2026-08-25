@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import * as packageRoot from "../src/index.js";
-import { defineSmokeConfig } from "../src/index.js";
+import { createLegacyBrowserSmoke, defineSmokeConfig } from "../src/index.js";
 
 const readManifest = async () =>
   JSON.parse(
@@ -50,8 +50,11 @@ describe("@cp949/legacy-browser-smoke 공개 package 계약", () => {
     ).toBe(false);
   });
 
-  it("B1 package root는 defineSmokeConfig만 export한다", () => {
-    expect(Object.keys(packageRoot)).toEqual(["defineSmokeConfig"]);
+  it("package root는 defineSmokeConfig와 createLegacyBrowserSmoke만 export한다", () => {
+    expect(Object.keys(packageRoot)).toEqual([
+      "defineSmokeConfig",
+      "createLegacyBrowserSmoke",
+    ]);
     expect(
       defineSmokeConfig({
         pages: [
@@ -64,5 +67,22 @@ describe("@cp949/legacy-browser-smoke 공개 package 계약", () => {
         timeoutMs: 1_000,
       }).pages[0]?.name,
     ).toBe("home");
+  });
+
+  it("facade instance의 own key는 run, selfTest뿐이다", () => {
+    const smoke = createLegacyBrowserSmoke({
+      pages: [
+        {
+          name: "home",
+          path: "/",
+          ready: { kind: "selector", selector: "main" },
+        },
+      ],
+      timeoutMs: 1_000,
+    });
+
+    expect(Reflect.ownKeys(smoke)).toEqual(["run", "selfTest"]);
+    expect(typeof smoke.run).toBe("function");
+    expect(typeof smoke.selfTest).toBe("function");
   });
 });
