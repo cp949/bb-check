@@ -59,11 +59,22 @@ describe("resolveBrowserBaseline", () => {
       "utf8",
     );
 
-    expect(() => resolveBrowserBaseline(fixture)).toThrow(
+    let caught: unknown;
+    try {
+      resolveBrowserBaseline(fixture);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toEqual(
       expect.objectContaining<Partial<NextWebpackBaselineError>>({
         code: "NWB_CONFIG_INVALID",
       }),
     );
+    expect((caught as Error).message).not.toContain(
+      "Browserslist config should be a string",
+    );
+    expect((caught as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
   });
 
   it("모든 target이 지원 가능한 최신 구문이면 NWB_BROWSERSLIST_MODERN_ONLY로 중단한다", async () => {

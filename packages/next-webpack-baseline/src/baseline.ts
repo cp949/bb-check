@@ -126,6 +126,14 @@ const browserlistMissing = (projectDir: string): never => {
   );
 };
 
+const browserlistInvalid = (projectDir: string, cause: unknown): never => {
+  throw new NextWebpackBaselineError(
+    NEXT_WEBPACK_BASELINE_ERROR_CODES.CONFIG_INVALID,
+    `${projectDir}의 production browserslist를 해석할 수 없습니다.`,
+    { cause },
+  );
+};
+
 export const resolveBrowserBaseline = (projectDir: string): BrowserBaseline => {
   let config: string | string[] | undefined;
   try {
@@ -134,10 +142,7 @@ export const resolveBrowserBaseline = (projectDir: string): BrowserBaseline => {
       env: "production",
     });
   } catch (cause) {
-    throw new NextWebpackBaselineError(
-      NEXT_WEBPACK_BASELINE_ERROR_CODES.CONFIG_INVALID,
-      `${projectDir}의 production browserslist를 해석할 수 없습니다: ${String(cause)}`,
-    );
+    return browserlistInvalid(projectDir, cause);
   }
   if (config === undefined) browserlistMissing(projectDir);
 
@@ -148,10 +153,7 @@ export const resolveBrowserBaseline = (projectDir: string): BrowserBaseline => {
       env: "production",
     });
   } catch (cause) {
-    throw new NextWebpackBaselineError(
-      NEXT_WEBPACK_BASELINE_ERROR_CODES.CONFIG_INVALID,
-      `${projectDir}의 production browserslist를 해석할 수 없습니다: ${String(cause)}`,
-    );
+    return browserlistInvalid(projectDir, cause);
   }
 
   const targets = [...new Set(loadedTargets)].sort();

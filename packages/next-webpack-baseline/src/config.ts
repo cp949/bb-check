@@ -25,8 +25,38 @@ const invalid = (message: string): never => {
   );
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+const readOwnProperty = (
+  value: object,
+  key: PropertyKey,
+):
+  | { kind: "absent" }
+  | { kind: "accessor" }
+  | { kind: "value"; value: unknown } => {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined) return { kind: "absent" };
+  if (!("value" in descriptor)) return { kind: "accessor" };
+  return { kind: "value", value: descriptor.value };
+};
+
+const readRequiredData = (
+  value: object,
+  key: string,
+  label: string,
+): unknown => {
+  const field = readOwnProperty(value, key);
+  if (field.kind !== "value") {
+    return invalid(`${label}은(는) own data property여야 합니다.`);
+  }
+  return field.value;
+};
 
 const assertOnlyKeys = (
   value: Record<string, unknown>,
@@ -46,10 +76,16 @@ const copyDenseArray = (value: unknown, label: string): unknown[] => {
 
   const copied: unknown[] = [];
   for (let index = 0; index < value.length; index += 1) {
-    if (!Object.hasOwn(value, index)) {
-      invalid(`${label}[${index}]가 없어 sparse array는 사용할 수 없습니다.`);
+    const item = readOwnProperty(value, index);
+    if (item.kind === "absent") {
+      return invalid(
+        `${label}[${index}]가 없어 sparse array는 사용할 수 없습니다.`,
+      );
     }
-    copied.push(value[index]);
+    if (item.kind === "accessor") {
+      return invalid(`${label}[${index}]은(는) accessor일 수 없습니다.`);
+    }
+    copied.push(item.value);
   }
   return copied;
 };
@@ -75,11 +111,18 @@ const normalizeReason = (value: unknown, label: string): string => {
 };
 
 const normalizePolicy = (value: unknown, label: string): PackagePolicy => {
-  if (!isRecord(value)) return invalid(`${label}은(는) object여야 합니다.`);
+  if (!isPlainObject(value))
+    return invalid(`${label}은(는) plain object여야 합니다.`);
   assertOnlyKeys(value, ["package", "reason"], label);
   return {
-    package: normalizePackageName(value.package, `${label}.package`),
-    reason: normalizeReason(value.reason, `${label}.reason`),
+    package: normalizePackageName(
+      readRequiredData(value, "package", `${label}.package`),
+      `${label}.package`,
+    ),
+    reason: normalizeReason(
+      readRequiredData(value, "reason", `${label}.reason`),
+      `${label}.reason`,
+    ),
   };
 };
 
@@ -106,13 +149,24 @@ const normalizeEntrypoints = (value: unknown, label: string): string[] => {
 };
 
 const normalizeWaiver = (value: unknown, label: string): PackageWaiver => {
-  if (!isRecord(value)) return invalid(`${label}은(는) object여야 합니다.`);
+  if (!isPlainObject(value))
+    return invalid(`${label}은(는) plain object여야 합니다.`);
   assertOnlyKeys(value, ["package", "reason", "allowedEntrypoints"], label);
   return {
-    package: normalizePackageName(value.package, `${label}.package`),
-    reason: normalizeReason(value.reason, `${label}.reason`),
+    package: normalizePackageName(
+      readRequiredData(value, "package", `${label}.package`),
+      `${label}.package`,
+    ),
+    reason: normalizeReason(
+      readRequiredData(value, "reason", `${label}.reason`),
+      `${label}.reason`,
+    ),
     allowedEntrypoints: normalizeEntrypoints(
-      value.allowedEntrypoints,
+      readRequiredData(
+        value,
+        "allowedEntrypoints",
+        `${label}.allowedEntrypoints`,
+      ),
       `${label}.allowedEntrypoints`,
     ),
   };
@@ -120,20 +174,25 @@ const normalizeWaiver = (value: unknown, label: string): PackageWaiver => {
 
 /** 입력을 모두 새 객체/배열로 옮겨 config source의 후속 mutation을 판정에서 격리한다. */
 export const normalizeConfig = (input: unknown): NormalizedConfig => {
-  if (!isRecord(input)) return invalid("config는 object여야 합니다.");
+  if (!isPlainObject(input))
+    return invalid("config는 plain object여야 합니다.");
   assertOnlyKeys(input, ["projectDir", "policy", "waivers"], "config");
 
-  if (typeof input.projectDir !== "string")
+  const projectDir = readRequiredData(input, "projectDir", "config.projectDir");
+  if (typeof projectDir !== "string")
     return invalid(
       "config.projectDir은(는) 비어 있지 않은 경로 문자열이어야 합니다.",
     );
-  if (input.projectDir.trim() === "")
+  if (projectDir.trim() === "")
     return invalid(
       "config.projectDir은(는) 비어 있지 않은 경로 문자열이어야 합니다.",
     );
 
   const policyByPackage = new Map<string, PackagePolicy>();
-  const policy = copyDenseArray(input.policy, "config.policy");
+  const policy = copyDenseArray(
+    readRequiredData(input, "policy", "config.policy"),
+    "config.policy",
+  );
   for (let index = 0; index < policy.length; index += 1) {
     const normalized = normalizePolicy(
       policy[index],
@@ -146,8 +205,12 @@ export const normalizeConfig = (input: unknown): NormalizedConfig => {
   }
 
   const waiversByPackage = new Map<string, PackageWaiver[]>();
-  if (input.waivers !== undefined) {
-    const waivers = copyDenseArray(input.waivers, "config.waivers");
+  const waiverField = readOwnProperty(input, "waivers");
+  if (waiverField.kind === "accessor") {
+    invalid("config.waivers은(는) own data property여야 합니다.");
+  }
+  if (waiverField.kind === "value" && waiverField.value !== undefined) {
+    const waivers = copyDenseArray(waiverField.value, "config.waivers");
     const waiverKeys = new Set<string>();
     for (let index = 0; index < waivers.length; index += 1) {
       const normalized = normalizeWaiver(
@@ -183,7 +246,7 @@ export const normalizeConfig = (input: unknown): NormalizedConfig => {
   }
 
   return {
-    projectDir: resolve(input.projectDir),
+    projectDir: resolve(projectDir),
     policyByPackage: new Map(
       [...policyByPackage].map(([packageName, policy]) => [
         packageName,

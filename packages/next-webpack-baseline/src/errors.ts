@@ -15,8 +15,12 @@ export type NextWebpackBaselineErrorCode =
 export class NextWebpackBaselineError extends Error {
   readonly code: NextWebpackBaselineErrorCode;
 
-  constructor(code: NextWebpackBaselineErrorCode, message: string) {
-    super(`[${code}] ${message}`);
+  constructor(
+    code: NextWebpackBaselineErrorCode,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(`[${code}] ${message}`, options);
     this.name = "NextWebpackBaselineError";
     this.code = code;
   }

@@ -8,6 +8,9 @@ import {
   defineConfig,
 } from "@cp949/next-webpack-baseline";
 
-const config = defineConfig({});
+const config = defineConfig({
+  projectDir: import.meta.dirname,
+  policy: [],
+});
 const baseline = createNextWebpackBaseline(config);
 ```

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { defineConfig } from "../src/index.js";
 
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -22,6 +23,12 @@ const readManifest = async () =>
   };
 
 describe("@cp949/next-webpack-baseline 공개 package 계약", () => {
+  it("공개 config type은 빈 policy의 중립 사용 예를 허용한다", () => {
+    const config = defineConfig({ projectDir: packageDir, policy: [] });
+
+    expect(config).toEqual({ projectDir: packageDir, policy: [] });
+  });
+
   it("공개 ESM root export와 Node 20 계약을 제공한다", async () => {
     const manifest = await readManifest();
 
@@ -69,7 +76,7 @@ describe("@cp949/next-webpack-baseline 공개 package 계약", () => {
     const packageRoot = await import(
       `${pathToFileURL(resolve(packageDir, "dist/index.js")).href}?${Date.now()}`
     );
-    const config = { enabled: true };
+    const config = { projectDir: packageDir, policy: [] };
 
     expect(packageRoot.defineConfig(config)).toEqual(config);
     expect(packageRoot.createNextWebpackBaseline(config)).toEqual({
