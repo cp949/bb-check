@@ -62,6 +62,40 @@ test("Windows npm만 shell 없이 npm CLI를 Node로 실행하고 node -e는 유
     }),
     { command: "node", args: ["-e", "dynamic value"] },
   );
+  assert.deepEqual(
+    packedPackage.createCommandInvocation(
+      "npm",
+      ["install", "C:\\dynamic path\\package.tgz"],
+      {
+        platform: "win32",
+        npmExecPath: undefined,
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+      },
+    ),
+    {
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: [
+        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+        "install",
+        "C:\\dynamic path\\package.tgz",
+      ],
+    },
+  );
+  assert.deepEqual(
+    packedPackage.createCommandInvocation("npx", ["bb-check", "--help"], {
+      platform: "win32",
+      npmExecPath: undefined,
+      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+    }),
+    {
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: [
+        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js",
+        "bb-check",
+        "--help",
+      ],
+    },
+  );
 });
 
 test("상위 dry-run 환경에서도 bb-check 격리 tarball과 CLI를 검증한다", () => {

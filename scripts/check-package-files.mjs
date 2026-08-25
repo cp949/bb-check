@@ -4,7 +4,7 @@
 // dependency를 package 사이에 공유하지 않고 검증한다.
 
 import { readdir, readFile } from "node:fs/promises";
-import { dirname, join, posix, resolve } from "node:path";
+import { dirname, join, posix, resolve, win32 } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -96,22 +96,25 @@ export const discoverPublicWorkspacePackages = async (repoRoot) =>
   );
 
 /** Windows에서는 npm.cmd를 shell로 열지 않고 npm CLI를 Node로 실행한다. */
-export const createCommandInvocation = (
-  command,
-  args,
-  {
-    platform = process.platform,
-    npmExecPath = process.env.npm_execpath,
-    nodeExecPath = process.execPath,
-  } = {},
-) => {
+export const createCommandInvocation = (command, args, options = {}) => {
+  const { platform = process.platform, nodeExecPath = process.execPath } =
+    options;
   if (platform !== "win32" || command !== "npm") return { command, args };
-  if (typeof npmExecPath !== "string" || npmExecPath.length === 0) {
-    throw new Error(
-      "Windows에서는 npm_execpath가 필요합니다. npm script로 실행하세요.",
-    );
-  }
-  return { command: nodeExecPath, args: [npmExecPath, ...args] };
+  const configuredNpmExecPath = Object.hasOwn(options, "npmExecPath")
+    ? options.npmExecPath
+    : process.env.npm_execpath;
+  const npmCliPath =
+    typeof configuredNpmExecPath === "string" &&
+    configuredNpmExecPath.length > 0
+      ? configuredNpmExecPath
+      : win32.join(
+          win32.dirname(nodeExecPath),
+          "node_modules",
+          "npm",
+          "bin",
+          "npm-cli.js",
+        );
+  return { command: nodeExecPath, args: [npmCliPath, ...args] };
 };
 
 const readNpmPackFiles = ({ packageDir, workspacePath }) => {
@@ -198,15 +201,25 @@ const collectExportTargets = (
     return;
   }
   if (Array.isArray(value)) {
-    value.forEach((item, index) =>
+    const fallbackProblems = [];
+    for (const [index, item] of value.entries()) {
+      const itemProblems = [];
+      const itemTargets = [];
       collectExportTargets(
         item,
         `${label}[${index}]`,
         workspacePath,
-        problems,
-        targets,
-      ),
-    );
+        itemProblems,
+        itemTargets,
+      );
+      if (itemTargets.length > 0) {
+        problems.push(...itemProblems);
+        targets.push(...itemTargets);
+        return;
+      }
+      fallbackProblems.push(...itemProblems);
+    }
+    problems.push(...fallbackProblems);
     return;
   }
   if (typeof value !== "object") {
@@ -215,6 +228,15 @@ const collectExportTargets = (
   }
 
   const keys = Object.keys(value);
+  for (const key of keys.filter((key) => /^(?:0|[1-9]\d*)$/u.test(key))) {
+    problems.push(
+      formatProblem(
+        workspacePath,
+        "exports",
+        `${label}: integer condition key는 사용할 수 없습니다: ${key}`,
+      ),
+    );
+  }
   if (keys.some((key) => key.startsWith("."))) {
     problems.push(
       formatProblem(
@@ -261,6 +283,15 @@ const validatedExportEntries = (exportsField, workspacePath, problems) => {
     }
     if (subpathKeys.length > 0) {
       return subpathKeys.map(([subpath, value]) => {
+        if (subpath !== "." && !subpath.startsWith("./")) {
+          problems.push(
+            formatProblem(
+              workspacePath,
+              "exports",
+              `유효하지 않은 subpath key입니다: ${subpath}`,
+            ),
+          );
+        }
         const targets = [];
         collectExportTargets(
           value,
@@ -401,6 +432,16 @@ const validatePackage = async ({
     workspacePath,
     problems,
   );
+  const rootExport = exports.find(([subpath]) => subpath === ".");
+  if (rootExport === undefined || rootExport[1].length === 0) {
+    problems.push(
+      formatProblem(
+        workspacePath,
+        "exports",
+        "사용 가능한 root export가 없습니다.",
+      ),
+    );
+  }
   for (const [subpath, targets] of exports) {
     for (const target of targets) {
       if (!target.startsWith("./")) {
@@ -572,6 +613,15 @@ const validatePackage = async ({
             workspacePath,
             "dependencies",
             `${field}[${JSON.stringify(name)}]에 공개 불가능한 spec이 남아 있습니다: ${spec}`,
+          ),
+        );
+      }
+      if (/^(?:\.{1,2}[\\/]|[\\/]|[A-Za-z]:)/u.test(spec)) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "dependencies",
+            `${field}[${JSON.stringify(name)}]에 공개 불가능한 local path spec이 남아 있습니다: ${spec}`,
           ),
         );
       }

@@ -58,27 +58,30 @@ export const forceActualNpmOperationEnv = (env) => ({
 });
 
 /** Windows npm/npx는 shell을 쓰지 않고 각 CLI를 Node로 직접 실행한다. */
-export const createCommandInvocation = (
-  command,
-  args,
-  {
-    platform = process.platform,
-    npmExecPath = process.env.npm_execpath,
-    nodeExecPath = process.execPath,
-  } = {},
-) => {
+export const createCommandInvocation = (command, args, options = {}) => {
+  const { platform = process.platform, nodeExecPath = process.execPath } =
+    options;
   if (platform !== "win32" || (command !== "npm" && command !== "npx")) {
     return { command, args };
   }
-  if (typeof npmExecPath !== "string" || npmExecPath.length === 0) {
-    throw new Error(
-      "Windows에서는 npm_execpath가 필요합니다. npm script로 실행하세요.",
-    );
-  }
+  const configuredNpmExecPath = Object.hasOwn(options, "npmExecPath")
+    ? options.npmExecPath
+    : process.env.npm_execpath;
+  const npmCliPath =
+    typeof configuredNpmExecPath === "string" &&
+    configuredNpmExecPath.length > 0
+      ? configuredNpmExecPath
+      : win32.join(
+          win32.dirname(nodeExecPath),
+          "node_modules",
+          "npm",
+          "bin",
+          "npm-cli.js",
+        );
   const cliPath =
     command === "npm"
-      ? npmExecPath
-      : win32.join(win32.dirname(npmExecPath), "npx-cli.js");
+      ? npmCliPath
+      : win32.join(win32.dirname(npmCliPath), "npx-cli.js");
   return { command: nodeExecPath, args: [cliPath, ...args] };
 };
 

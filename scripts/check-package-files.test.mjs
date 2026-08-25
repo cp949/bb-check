@@ -82,6 +82,20 @@ test("Windows npm은 shell 없이 npm CLI를 Node로 실행하고 node 명령은
     }),
     { command: "node", args: ["-e", "dynamic value"] },
   );
+  assert.deepEqual(
+    packageFiles.createCommandInvocation("npm", ["pack"], {
+      platform: "win32",
+      npmExecPath: undefined,
+      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+    }),
+    {
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: [
+        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+        "pack",
+      ],
+    },
+  );
 });
 
 test("모든 공개 workspace를 workspace path 순서로 발견한다", async () => {
@@ -280,6 +294,147 @@ test("exports의 subpath key와 condition key를 섞으면 거부한다", async 
   });
 
   assert.match(result.problems.join("\n"), /subpath.*condition.*혼합/u);
+});
+
+const checkExports = async (exports) => {
+  const root = await createRepo();
+  await writePackage(
+    root,
+    "packages/export-fixture",
+    publicManifest("@fixture/exports", exports),
+    {
+      "dist/index.js": "export const value = 1;\n",
+      "dist/index.d.ts": "export declare const value = 1;\n",
+      "README.md": "# exports fixture\n",
+      LICENSE: "fixture license\n",
+    },
+  );
+  return checkPublicWorkspacePackages({
+    repoRoot: root,
+    readPackFiles: async () => [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/index.js",
+      "dist/index.d.ts",
+    ],
+  });
+};
+
+test("Node exports의 유효한 root, condition, subpath, array/null fallback을 허용한다", async () => {
+  const cases = [
+    ["root string", "./dist/index.js"],
+    [
+      "root condition",
+      { types: "./dist/index.d.ts", import: "./dist/index.js" },
+    ],
+    ["root array fallback", [42, null, "./dist/index.js"]],
+    [
+      "subpath map",
+      {
+        ".": "./dist/index.js",
+        "./disabled": null,
+        "./fallback": [42, "./dist/index.js"],
+      },
+    ],
+  ];
+
+  for (const [name, exports] of cases) {
+    const result = await checkExports(exports);
+    assert.doesNotMatch(
+      result.problems.join("\n"),
+      /\[exports\]/u,
+      `${name}: ${result.problems.join("\n")}`,
+    );
+  }
+});
+
+test("공개 root가 없거나 Node exports key/target이 잘못된 형태를 거부한다", async () => {
+  const cases = [
+    ["empty root", {}, /사용 가능한 root export/u],
+    ["null root", null, /사용 가능한 root export/u],
+    ["null dot root", { ".": null }, /사용 가능한 root export/u],
+    [
+      "subpath only",
+      { "./feature": "./dist/index.js" },
+      /사용 가능한 root export/u,
+    ],
+    ["invalid subpath", { ".foo": "./dist/index.js" }, /subpath key/u],
+    [
+      "integer condition",
+      { 0: "./dist/index.js", default: "./dist/index.js" },
+      /integer condition key/u,
+    ],
+    [
+      "direct invalid condition target",
+      { import: 42, default: "./dist/index.js" },
+      /invalid export target type/u,
+    ],
+    ["invalid-only array", [42], /invalid export target type/u],
+  ];
+
+  for (const [name, exports, expected] of cases) {
+    const result = await checkExports(exports);
+    assert.match(
+      result.problems.join("\n"),
+      expected,
+      `${name}: ${result.problems.join("\n")}`,
+    );
+  }
+});
+
+test("dependency 필드의 prefix 없는 POSIX와 Windows local path를 거부한다", async () => {
+  const root = await createRepo();
+  await writePackage(
+    root,
+    "packages/local-dependencies",
+    {
+      ...publicManifest("@fixture/local-dependencies", "./dist/index.js"),
+      dependencies: {
+        parentRelative: "../local",
+        currentRelative: "./local",
+        posixAbsolute: "/opt/local",
+      },
+      peerDependencies: {
+        windowsRooted: "\\local",
+        windowsUnc: "\\\\server\\share",
+      },
+      optionalDependencies: {
+        windowsDriveAbsolute: "C:\\local",
+        windowsDriveRelative: "C:local",
+      },
+    },
+    {
+      "dist/index.js": "export const value = 1;\n",
+      "dist/index.d.ts": "export declare const value = 1;\n",
+      "README.md": "# local dependencies\n",
+      LICENSE: "fixture license\n",
+    },
+  );
+
+  const result = await checkPublicWorkspacePackages({
+    repoRoot: root,
+    readPackFiles: async () => [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/index.js",
+      "dist/index.d.ts",
+    ],
+  });
+  const problems = result.problems.join("\n");
+
+  for (const dependency of [
+    "parentRelative",
+    "currentRelative",
+    "posixAbsolute",
+    "windowsRooted",
+    "windowsUnc",
+    "windowsDriveAbsolute",
+    "windowsDriveRelative",
+  ]) {
+    assert.match(problems, new RegExp(`${dependency}.*local path`, "u"));
+  }
 });
 
 test("두 공개 package의 generated LICENSE는 Git ignore 대상이다", () => {
