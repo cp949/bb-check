@@ -257,6 +257,7 @@ describe("createVerdict", () => {
 
   it.each([
     "/consumer/src/application.js",
+    "/consumer/src/__virtual__/application.js",
     "C:\\consumer\\src\\application.js",
     "\\\\server\\share\\consumer\\src\\application.js",
   ])("도달한 일반 application resource %s는 ignored 한다", (appResource) => {

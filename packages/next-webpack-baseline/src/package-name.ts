@@ -83,15 +83,16 @@ const isAbsoluteResource = (resource: string): boolean =>
     isCompleteUncResource(resource)) &&
   hasContentBeyondRoot(resource);
 
-const hasOpaqueZipSegment = (resource: string): boolean =>
-  normalizedSegments(resource).some((segment) => {
-    const normalized = segment.toLowerCase();
-    return (
-      normalized.endsWith(".zip") ||
-      normalized === ".yarn" ||
-      normalized === "__virtual__"
-    );
-  });
+const hasOpaqueYarnPath = (resource: string): boolean => {
+  const segments = normalizedSegments(resource).map((segment) =>
+    segment.toLowerCase(),
+  );
+  return segments.some(
+    (segment, index) =>
+      segment.endsWith(".zip") ||
+      (segment === ".yarn" && segments[index + 1] === "__virtual__"),
+  );
+};
 
 const nodeModulesBoundary = (resource: string): number => {
   const segments = normalizedSegments(resource);
@@ -109,7 +110,7 @@ export const hasNodeModulesBoundaryClaim = (resource: string): boolean =>
 
 /** verdict의 early ignore 전에 절대 resource 형상과 비-opaque filesystem 경로를 보장한다. */
 export const assertResourceShape = (resource: string): void => {
-  if (!isAbsoluteResource(resource) || hasOpaqueZipSegment(resource)) {
+  if (!isAbsoluteResource(resource) || hasOpaqueYarnPath(resource)) {
     unresolved(resource);
   }
 };
@@ -117,7 +118,7 @@ export const assertResourceShape = (resource: string): void => {
 /** package 경계 주장이 없는 검증된 application resource만 verdict에서 무시할 수 있다. */
 export const isProvenOrdinaryAppResource = (resource: string): boolean =>
   isAbsoluteResource(resource) &&
-  !hasOpaqueZipSegment(resource) &&
+  !hasOpaqueYarnPath(resource) &&
   !hasNodeModulesBoundaryClaim(resource);
 
 /** npm의 실제 node_modules 경계를 path 문자열만으로 안전하게 복원한다. */

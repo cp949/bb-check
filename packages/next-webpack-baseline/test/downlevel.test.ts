@@ -23,6 +23,11 @@ describe("resolvePackageResource", () => {
     },
     {
       resource:
+        "/consumer/.yarn/unplugged/legacy-widget-npm-1.0.0/node_modules/legacy-widget/dist/index.js",
+      want: { package: "legacy-widget", entrypoint: "dist/index.js" },
+    },
+    {
+      resource:
         "/consumer/node_modules/outer/node_modules/inner/lib/browser.js",
       want: { package: "inner", entrypoint: "lib/browser.js" },
     },
