@@ -28,6 +28,19 @@ const isSafeEntrypoint = (entrypoint: string): boolean => {
   return posix.normalize(entrypoint) === entrypoint;
 };
 
+/** 모든 normalized waiver를 module 판단 전에 검증해 도달하지 않는 module도 fail-closed로 유지한다. */
+export const validateWaivers = (
+  waiversByPackage: ReadonlyMap<string, readonly PackageWaiver[]>,
+): void => {
+  for (const waivers of waiversByPackage.values()) {
+    for (const waiver of waivers) {
+      for (const entrypoint of waiver.allowedEntrypoints) {
+        if (!isSafeEntrypoint(entrypoint)) invalidEntrypoint();
+      }
+    }
+  }
+};
+
 /** waiver는 package와 완전한 package-relative entrypoint가 모두 같을 때만 찾는다. */
 export const findExactWaiver = (
   waiversByPackage: ReadonlyMap<string, readonly PackageWaiver[]>,
@@ -37,7 +50,6 @@ export const findExactWaiver = (
   const matches: PackageWaiver[] = [];
   for (const waiver of waivers) {
     for (const entrypoint of waiver.allowedEntrypoints) {
-      if (!isSafeEntrypoint(entrypoint)) invalidEntrypoint();
       if (entrypoint === resource.entrypoint) matches.push(waiver);
     }
   }

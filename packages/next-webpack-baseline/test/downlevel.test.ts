@@ -43,8 +43,11 @@ describe("resolvePackageResource", () => {
 
   it.each([
     "C:chunk.cjs",
+    "\\consumer\\node_modules\\legacy-widget\\dist\\compat.cjs",
     "/consumer/packages/legacy-widget/dist/compat.cjs",
     "/consumer/.yarn/cache/legacy-widget-npm-1.0.0.zip/node_modules/legacy-widget/index.js",
+    "/consumer/.yarn/cache/legacy-widget-npm-1.0.0.ZIP/node_modules/legacy-widget/index.js",
+    "\\\\node_modules\\share\\consumer\\src\\app.js",
     "/consumer/node_modules/legacy-widget",
   ])("지원하지 않는 경로 %s를 안전한 코드로 거부한다", (resource) => {
     expect(() => resolvePackageResource(resource)).toThrow(

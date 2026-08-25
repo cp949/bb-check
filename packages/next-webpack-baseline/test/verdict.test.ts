@@ -101,10 +101,11 @@ describe("createVerdict", () => {
       });
 
       expect(verdict.status).toBe(status);
-      expect(verdict.resource).toEqual({
-        package: "legacy-widget",
-        entrypoint: "dist/compat.cjs",
-      });
+      expect(verdict.resource).toEqual(
+        reachable
+          ? { package: "legacy-widget", entrypoint: "dist/compat.cjs" }
+          : undefined,
+      );
       expect(verdict.diagnostics).toEqual(
         status === "ignored" ? [] : diagnostics.diagnostics,
       );
@@ -131,11 +132,49 @@ describe("createVerdict", () => {
     expect(verdict.status).toBe("fail");
   });
 
+  it("parse-incomplete diagnostic은 정확한 waiver가 있어도 실패로 남긴다", () => {
+    const verdict = createVerdict({
+      config: configFor({
+        included: true,
+        waivers: [
+          {
+            package: "legacy-widget",
+            reason: "syntax exception",
+            allowedEntrypoints: ["dist/compat.cjs"],
+          },
+        ],
+      }),
+      resource,
+      syntax: {
+        diagnostics: [
+          {
+            code: "NWB_SYNTAX_UNSUPPORTED",
+            feature: "optional-chaining",
+            message: "unsupported",
+          },
+          {
+            code: "NWB_SYNTAX_PARSE_INCOMPLETE",
+            message: "parse incomplete",
+          },
+        ],
+      },
+      isClientEntryReachable: true,
+    });
+
+    expect(verdict.status).toBe("fail");
+    expect(verdict.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      "NWB_SYNTAX_PARSE_INCOMPLETE",
+      "NWB_SYNTAX_UNSUPPORTED",
+    ]);
+  });
+
   it.each([
     "../compat.cjs",
     "/dist/compat.cjs",
     "dist\\compat.cjs",
     "C:compat.cjs",
+    "./dist/compat.cjs",
+    "dist//compat.cjs",
   ])(
     "unsafe waiver entrypoint %s를 NWB_WAIVER_INVALID로 fail-closed 한다",
     (entrypoint) => {
@@ -162,6 +201,98 @@ describe("createVerdict", () => {
       );
     },
   );
+
+  it.each([
+    {
+      name: "정책에 없는 package",
+      included: false,
+      reachable: true,
+      syntax: incompatible,
+    },
+    {
+      name: "client graph 밖 module",
+      included: true,
+      reachable: false,
+      syntax: incompatible,
+    },
+    {
+      name: "clean module",
+      included: true,
+      reachable: true,
+      syntax: { diagnostics: [] },
+    },
+  ] satisfies ReadonlyArray<{
+    name: string;
+    included: boolean;
+    reachable: boolean;
+    syntax: SyntaxAnalysis;
+  }>)(
+    "unused package의 unsafe waiver도 $name 전에 fail-closed 한다",
+    ({ included, reachable, syntax }) => {
+      const config = configFor({ included });
+      const unsafeWaiver = {
+        package: "unused-widget",
+        reason: "unsafe even when unused",
+        allowedEntrypoints: ["../compat.cjs"],
+      };
+      const verdictConfig: NormalizedConfig = {
+        ...config,
+        waiversByPackage: new Map([["unused-widget", [unsafeWaiver]]]),
+      };
+
+      expect(() =>
+        createVerdict({
+          config: verdictConfig,
+          resource,
+          syntax,
+          isClientEntryReachable: reachable,
+        }),
+      ).toThrow(
+        expect.objectContaining<Partial<NextWebpackBaselineError>>({
+          code: "NWB_WAIVER_INVALID",
+        }),
+      );
+    },
+  );
+
+  it("도달한 일반 application resource는 package 경계 오류 없이 ignored 한다", () => {
+    const verdict = createVerdict({
+      config: configFor({ included: true }),
+      resource: "/consumer/src/application.js",
+      syntax: incompatible,
+      isClientEntryReachable: true,
+    });
+
+    expect(verdict).toEqual({ status: "ignored", diagnostics: [] });
+  });
+
+  it("client graph 밖 opaque resource는 package 경계 전에 ignored 한다", () => {
+    const verdict = createVerdict({
+      config: configFor({ included: true }),
+      resource:
+        "/consumer/.yarn/cache/legacy-widget-npm-1.0.0.zip/node_modules/legacy-widget/index.js",
+      syntax: incompatible,
+      isClientEntryReachable: false,
+    });
+
+    expect(verdict).toEqual({ status: "ignored", diagnostics: [] });
+  });
+
+  it("도달한 opaque node_modules claim은 unresolved 오류로 중단한다", () => {
+    expect(() =>
+      createVerdict({
+        config: configFor({ included: true }),
+        resource:
+          "/consumer/.yarn/cache/legacy-widget-npm-1.0.0.ZIP/node_modules/legacy-widget/index.js",
+        syntax: incompatible,
+        isClientEntryReachable: true,
+      }),
+    ).toThrow(
+      expect.objectContaining<Partial<NextWebpackBaselineError>>({
+        code: "NWB_PACKAGE_PATH_UNRESOLVED",
+      }),
+    );
+  });
 
   it("syntax diagnostics를 입력 순서와 무관하게 안정적으로 정렬한다", () => {
     const verdict = createVerdict({
@@ -196,5 +327,31 @@ describe("createVerdict", () => {
     expect(verdict.diagnostics.map((diagnostic) => diagnostic.feature)).toEqual(
       [undefined, "optional-chaining", "private-methods"],
     );
+  });
+
+  it("verdict diagnostics를 input array와 record mutation에서 분리한다", () => {
+    const diagnostic = {
+      code: "NWB_SYNTAX_UNSUPPORTED" as const,
+      feature: "optional-chaining" as const,
+      message: "initial message",
+    };
+    const diagnostics = [diagnostic];
+    const verdict = createVerdict({
+      config: configFor({ included: true }),
+      resource,
+      syntax: { diagnostics },
+      isClientEntryReachable: true,
+    });
+
+    diagnostic.message = "mutated message";
+    diagnostics.length = 0;
+
+    expect(verdict.diagnostics).toEqual([
+      {
+        code: "NWB_SYNTAX_UNSUPPORTED",
+        feature: "optional-chaining",
+        message: "initial message",
+      },
+    ]);
   });
 });

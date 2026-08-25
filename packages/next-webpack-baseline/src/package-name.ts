@@ -25,7 +25,14 @@ const unresolved = (resource: string): never => {
 };
 
 const isAbsoluteResource = (resource: string): boolean =>
-  posix.isAbsolute(resource) || win32.isAbsolute(resource);
+  !isCurrentDriveRooted(resource) &&
+  (posix.isAbsolute(resource) || win32.isAbsolute(resource));
+
+const isCurrentDriveRooted = (resource: string): boolean =>
+  resource.startsWith("\\") && !resource.startsWith("\\\\");
+
+const isUncResource = (resource: string): boolean =>
+  resource.startsWith("\\\\") || resource.startsWith("//");
 
 const normalizedSegments = (resource: string): readonly string[] =>
   posix
@@ -33,19 +40,34 @@ const normalizedSegments = (resource: string): readonly string[] =>
     .split("/")
     .filter((segment) => segment !== "");
 
+const nodeModulesBoundary = (resource: string): number => {
+  const segments = normalizedSegments(resource);
+  let boundary = -1;
+  const firstSearchIndex = isUncResource(resource) ? 2 : 0;
+  for (let index = firstSearchIndex; index < segments.length; index += 1) {
+    if (segments[index] === "node_modules") boundary = index;
+  }
+  return boundary;
+};
+
+/** resource가 node_modules package인 것처럼 보이는지, verdict의 unresolved 처리를 위해 보수적으로 확인한다. */
+export const hasNodeModulesBoundaryClaim = (resource: string): boolean =>
+  nodeModulesBoundary(resource) !== -1;
+
 /** npm의 실제 node_modules 경계를 path 문자열만으로 안전하게 복원한다. */
 export const resolvePackageResource = (resource: string): PackageResource => {
   if (!isAbsoluteResource(resource)) return unresolved(resource);
 
   const segments = normalizedSegments(resource);
-  let boundary = -1;
-  for (let index = 0; index < segments.length; index += 1) {
-    if (segments[index] === "node_modules") boundary = index;
-  }
+  const boundary = nodeModulesBoundary(resource);
   if (boundary === -1) return unresolved(resource);
 
   // zip archive 내부 경로는 PnP virtual filesystem일 수 있어 host file 경계를 증명하지 못한다.
-  if (segments.slice(0, boundary).some((segment) => segment.endsWith(".zip"))) {
+  if (
+    segments
+      .slice(0, boundary)
+      .some((segment) => segment.toLowerCase().endsWith(".zip"))
+  ) {
     return unresolved(resource);
   }
 
