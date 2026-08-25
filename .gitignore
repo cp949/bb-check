@@ -1,5 +1,7 @@
 # custom
 _tmp/
+docs/superpowers/
+.superpowers/
 
 # @cp949/bb-check `prepack`(scripts/copy-root-license.mjs)이 루트 LICENSE를
 # 매번 새로 복사해 넣는 산출물이다. package README는 package가 직접 소유한다.
