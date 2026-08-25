@@ -29,4 +29,12 @@ describe("workspace 공개 경계", () => {
       "npm run test-packed-package -- --package @cp949/next-webpack-baseline",
     );
   });
+
+  it("root Vitest는 공유 dist build를 file 병렬 실행하지 않는다", async () => {
+    const rootManifest = await readJson("package.json");
+
+    expect(rootManifest.scripts.test).toBe(
+      'vitest run --exclude "scripts/**" --no-file-parallelism',
+    );
+  });
 });

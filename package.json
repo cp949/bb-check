@@ -13,7 +13,7 @@
   "scripts": {
     "build": "turbo run build",
     "build:release": "turbo run build --force",
-    "test": "vitest run --exclude \"scripts/**\"",
+    "test": "vitest run --exclude \"scripts/**\" --no-file-parallelism",
     "test:scripts": "node --test scripts/*.test.mjs",
     "test:scripts:next": "node --test scripts/check-package-files.test.mjs scripts/check-public-words.test.mjs scripts/copy-root-license.test.mjs scripts/publish-package.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && turbo run typecheck",
