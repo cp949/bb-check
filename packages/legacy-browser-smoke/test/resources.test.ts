@@ -530,7 +530,7 @@ describe("beginPageResourceCollection", () => {
     expect(text).not.toContain("hash");
   });
 
-  it("DOM snapshot 실패도 listener를 해제한 채 원래 오류를 보존한다", async () => {
+  it("DOM snapshot 실패는 listener를 해제한 채 빈 목록으로 degrade한다", async () => {
     const session = new SessionDouble();
     const failure = new Error("evaluate failed");
     session.command = async (method: string): Promise<never> => {
@@ -539,8 +539,80 @@ describe("beginPageResourceCollection", () => {
       return undefined as never;
     };
     const collector = await beginPageResourceCollection(session);
+    session.emit("Network.requestWillBeSent", {
+      requestId: "first",
+      type: "Script",
+      request: { url: "https://example.test/app.js" },
+    });
+    session.emit("Network.loadingFailed", {
+      requestId: "first",
+      errorText: "net::ERR_FAILED",
+      canceled: false,
+    });
 
-    await expect(collector.finish()).rejects.toBe(failure);
+    const result = await collector.finish();
+
+    expect(result).toEqual({
+      scripts: [],
+      stylesheets: [],
+      failedRequests: [
+        {
+          kind: "request-failed",
+          text: "type=Script; path=/app.js; error=net::ERR_FAILED; blocked=; canceled=false",
+        },
+      ],
+    });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.scripts)).toBe(true);
+    expect(Object.isFrozen(result.stylesheets)).toBe(true);
+    expect(Object.isFrozen(result.failedRequests)).toBe(true);
+    expect(session.listenerCount()).toBe(0);
+    collector.dispose();
+    expect(session.commands.map((command) => command.method)).toEqual([
+      "Network.enable",
+      "Runtime.evaluate",
+    ]);
+  });
+
+  it("evaluation-exception 모양의 CDP 응답도 listener를 해제한 채 빈 목록으로 degrade한다", async () => {
+    const session = new SessionDouble();
+    session.command = async <T>(method: string): Promise<T> => {
+      session.commands.push({ method });
+      if (method === "Runtime.evaluate") {
+        return {
+          result: { type: "object", subtype: "error" },
+          exceptionDetails: { text: "Uncaught (in promise)" },
+        } as T;
+      }
+      return undefined as T;
+    };
+    const collector = await beginPageResourceCollection(session);
+    session.emit("Network.requestWillBeSent", {
+      requestId: "first",
+      type: "Script",
+      request: { url: "https://example.test/app.js" },
+    });
+    session.emit("Network.loadingFailed", {
+      requestId: "first",
+      errorText: "net::ERR_FAILED",
+      canceled: false,
+    });
+
+    const result = await collector.finish();
+
+    expect(result).toEqual({
+      scripts: [],
+      stylesheets: [],
+      failedRequests: [
+        {
+          kind: "request-failed",
+          text: "type=Script; path=/app.js; error=net::ERR_FAILED; blocked=; canceled=false",
+        },
+      ],
+    });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.scripts)).toBe(true);
+    expect(Object.isFrozen(result.stylesheets)).toBe(true);
     expect(session.listenerCount()).toBe(0);
     collector.dispose();
     expect(session.commands.map((command) => command.method)).toEqual([

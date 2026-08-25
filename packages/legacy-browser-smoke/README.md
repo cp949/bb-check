@@ -8,7 +8,10 @@ console/page-error, 실패한 요청)를 판정한다.
 ## 지원 범위
 
 - 고정 Chromium: revision `650583`, `Chromium 75.0.3765.0`
-- 실행 플랫폼: Linux x64 전용(다른 플랫폼은 `LBS_PLATFORM_UNSUPPORTED`)
+- 실행 플랫폼: 자동 provisioning(관리형 Chromium 다운로드)은 Linux x64
+  전용(다른 플랫폼은 `LBS_PLATFORM_UNSUPPORTED`) — `executablePath`를 직접
+  지정하면 플랫폼 검사보다 먼저 그 경로를 검증하므로, 실행 파일을 직접
+  지정하는 경우에는 다른 플랫폼에서도 동작한다
 - Node.js 22 이상(`LBS_NODE_UNSUPPORTED`)
 - 소비자가 지정한 loopback origin의 page 여러 개를 순회하며 로드 성공 여부와
   console/page-error/request-failed 신호를 판정
@@ -39,8 +42,10 @@ content를 가리킨다. 다운로드 후 SHA-256이 위 값과 일치하지 않
 
 관리형 Chromium을 저장할 cache root는 다음 순서로 결정한다.
 
-1. `ensureChromium({ cacheDirectory })`에 준 절대 경로
-2. 절대 경로인 `XDG_CACHE_HOME`
+1. (package 내부 전용) provisioner에 넘긴 명시적 cache 디렉터리 — package
+   내부 provisioning 로직에서만 쓰이며, 공개 API(`run`/`selfTest`)는 이
+   값을 받는 파라미터를 노출하지 않으므로 소비자가 지정할 수 없다.
+2. 절대 경로인 `XDG_CACHE_HOME` — 소비자가 실제로 조정할 수 있는 값
 3. `$HOME/.cache`
 
 실제로 파일을 쓰는 경로는 cache root 아래 다음 구조로 고정된다.
@@ -175,23 +180,23 @@ exit 1이다. `--help`는 브라우저·네트워크·파일시스템을 전혀 
 
 ## 오류 코드
 
-| 코드                                          | 의미                                                                   |
-| --------------------------------------------- | ---------------------------------------------------------------------- |
-| `LBS_CONFIG_INVALID`                          | `defineSmokeConfig`/sandbox 옵션 형식 오류                             |
-| `LBS_NODE_UNSUPPORTED`                        | Node 22 미만에서 Chromium provisioning 시도                            |
-| `LBS_PLATFORM_UNSUPPORTED`                    | Linux x64가 아닌 플랫폼                                                |
-| `LBS_CACHE_IO`                                | cache 경로 계산·생성 실패, 또는 설치된 package 디렉터리를 cache로 지정 |
-| `LBS_PROVISION_LOCK_TIMEOUT`                  | provisioning lock 대기 시간 초과(다른 프로세스가 보유 중이거나 stale)  |
-| `LBS_DOWNLOAD_FAILED`                         | archive 다운로드 실패(비-HTTPS URL 포함)                               |
-| `LBS_ARCHIVE_UNSAFE` / `LBS_ARCHIVE_INVALID`  | archive 항목이 안전하지 않거나 형식이 예상과 다름                      |
-| `LBS_CHECKSUM_MISMATCH`                       | 다운로드한 archive의 SHA-256이 registry 값과 불일치                    |
-| `LBS_BROWSER_EXECUTABLE_INVALID`              | `executablePath`가 실행 가능한 일반 파일이 아님(symlink 포함 거부)     |
-| `LBS_BROWSER_VERSION_MISMATCH`                | 지정한 실행 파일의 버전이 고정 버전과 다름                             |
-| `LBS_SANDBOX_UNAVAILABLE`                     | root에서 sandbox 필수 모드로 실행 시도                                 |
-| `LBS_ORIGIN_NOT_LOOPBACK`                     | `run`의 `origin`이 loopback http root가 아님                           |
-| `LBS_CONNECT_TIMEOUT` / `LBS_COMMAND_TIMEOUT` | CDP 연결 또는 명령 응답 시간 초과                                      |
-| `LBS_PAGE_NOT_READY`                          | page의 `ready` 조건이 `timeoutMs` 안에 참이 되지 않음                  |
-| `LBS_ABORTED`                                 | 호출자가 넘긴 `AbortSignal`로 중단됨                                   |
+| 코드                                          | 의미                                                                                                                                             |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `LBS_CONFIG_INVALID`                          | `defineSmokeConfig`/sandbox 옵션 형식 오류                                                                                                       |
+| `LBS_NODE_UNSUPPORTED`                        | Node 22 미만에서 Chromium provisioning 시도                                                                                                      |
+| `LBS_PLATFORM_UNSUPPORTED`                    | Linux x64가 아닌 플랫폼                                                                                                                          |
+| `LBS_CACHE_IO`                                | cache 경로 계산·생성 실패, 또는 설치된 package 디렉터리를 cache로 지정                                                                           |
+| `LBS_PROVISION_LOCK_TIMEOUT`                  | provisioning lock 대기 시간 초과(다른 프로세스가 보유 중이거나 stale)                                                                            |
+| `LBS_DOWNLOAD_FAILED`                         | archive 다운로드 실패(비-HTTPS URL 포함)                                                                                                         |
+| `LBS_ARCHIVE_UNSAFE` / `LBS_ARCHIVE_INVALID`  | archive 항목이 안전하지 않거나 형식이 예상과 다름                                                                                                |
+| `LBS_CHECKSUM_MISMATCH`                       | 다운로드한 archive의 SHA-256이 registry 값과 불일치                                                                                              |
+| `LBS_BROWSER_EXECUTABLE_INVALID`              | `executablePath`가 실행 가능한 일반 파일이 아님(symlink 포함 거부)                                                                               |
+| `LBS_BROWSER_VERSION_MISMATCH`                | 지정한 실행 파일의 버전이 고정 버전과 다름                                                                                                       |
+| `LBS_SANDBOX_UNAVAILABLE`                     | root에서 sandbox 필수 모드로 실행 시도                                                                                                           |
+| `LBS_ORIGIN_NOT_LOOPBACK`                     | `run`의 `origin`이 loopback http root가 아님                                                                                                     |
+| `LBS_CONNECT_TIMEOUT` / `LBS_COMMAND_TIMEOUT` | CDP 연결 또는 명령 응답 시간 초과                                                                                                                |
+| `LBS_PAGE_NOT_READY`                          | page의 `ready` 조건이 `timeoutMs` 안에 참이 되지 않음                                                                                            |
+| `LBS_ABORTED`                                 | (package 내부 전용) 내부 로직이 자체 `AbortSignal`로 중단시킴 — 공개 API(`run`/`selfTest`)는 소비자가 signal을 넘기는 파라미터를 노출하지 않는다 |
 
 ## 보안
 

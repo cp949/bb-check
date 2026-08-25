@@ -300,6 +300,38 @@ describe("Chromium secure provisioning", () => {
     expect(chromium.path.startsWith(join(home, ".cache"))).toBe(true);
   });
 
+  it("HTTP body가 3개 이상 chunk로 나뉘어 도착해도 합쳐진 archive digest 검증을 통과하고 provisioning에 성공한다", async () => {
+    const home = await temporaryDirectory();
+    const chunkSize = Math.ceil(archiveBytes.length / 4);
+    const bodyChunks: Buffer[] = [];
+    for (let offset = 0; offset < archiveBytes.length; offset += chunkSize) {
+      bodyChunks.push(archiveBytes.subarray(offset, offset + chunkSize));
+    }
+    // 115MB production 다운로드는 하나의 chunk로 오지 않는다 — 이 fixture는
+    // 그 streamed multi-chunk body를 흉내내 hash.update가 chunk마다 누적
+    // 적용되는지, 즉 조립된 전체 byte에 대해 digest 검증이 이뤄지는지 확인한다.
+    expect(bodyChunks.length).toBeGreaterThanOrEqual(3);
+    expect(Buffer.concat(bodyChunks)).toEqual(archiveBytes);
+
+    const provision = createChromiumProvisioner(
+      adapters(home, {
+        http: {
+          request: async () => ({
+            statusCode: 200,
+            headers: {},
+            body: chunks(bodyChunks),
+            dispose: async () => undefined,
+          }),
+        },
+      }),
+    );
+
+    const chromium = await provision();
+
+    expect(chromium.path.startsWith(join(home, ".cache"))).toBe(true);
+    expect(chromium.version).toBe(entry.version);
+  });
+
   it("relative XDG는 무시하고 HOME/.cache를 사용한다", async () => {
     const home = await temporaryDirectory();
     const provision = createChromiumProvisioner(

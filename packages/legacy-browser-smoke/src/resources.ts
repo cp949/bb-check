@@ -140,7 +140,14 @@ const deferred = <Value>(): {
   return { promise, resolve, reject };
 };
 
-const readSnapshot = (value: unknown): PageResources => {
+// Runtime.evaluate 응답 껍데기를 벗겨 snapshot record를 꺼낸다.
+// CDP round-trip 자체가 실패하거나(커맨드 reject) evaluation-exception 모양
+// (예: {result:{type:"object",subtype:"error"},exceptionDetails:{...}})처럼
+// 껍데기 자체가 기대와 다르면 여기서 던진다 — 이는 페이지 콘텐츠 검증이 아니라
+// CDP가 snapshot을 아예 내주지 못한 경우이므로 finish()에서 degrade 대상이 된다.
+const unwrapSnapshotContainer = (
+  value: unknown,
+): Readonly<Record<string, unknown>> => {
   if (!isRecord(value)) {
     throw new TypeError("invalid Runtime.evaluate result");
   }
@@ -152,6 +159,16 @@ const readSnapshot = (value: unknown): PageResources => {
   if (!isRecord(snapshot)) {
     throw new TypeError("invalid page resource snapshot");
   }
+  return snapshot;
+};
+
+// 껍데기를 벗긴 snapshot record에서 실제 script/stylesheet 값을 읽고 검증한다.
+// 여기서 던지는 오류(상대 URL, 접근 불가능한 accessor 등)는 페이지가 내려준
+// 콘텐츠 자체에 대한 fail-closed 검증이므로 finish()에서 degrade하지 않고
+// 그대로 전파한다.
+const readResourcesFromSnapshot = (
+  snapshot: Readonly<Record<string, unknown>>,
+): PageResources => {
   const rawScripts = denseValues(ownValue(snapshot, "scripts"));
   const rawStylesheets = denseValues(ownValue(snapshot, "stylesheets"));
 
@@ -347,11 +364,22 @@ export const beginPageResourceCollection = async (
     detach();
     void Promise.resolve()
       .then(async () => {
-        const snapshot = await session.command("Runtime.evaluate", {
-          expression: snapshotExpression,
-          returnByValue: true,
-        });
-        const resources = readSnapshot(snapshot);
+        let snapshot: Readonly<Record<string, unknown>>;
+        try {
+          const evaluated = await session.command("Runtime.evaluate", {
+            expression: snapshotExpression,
+            returnByValue: true,
+          });
+          snapshot = unwrapSnapshotContainer(evaluated);
+        } catch {
+          // scripts/stylesheets는 어떤 소비자도 읽지 않는 부가 데이터다(smoke.ts는
+          // failedRequests만 사용한다). CDP round-trip이 실패하거나 예기치 못한
+          // 모양으로 돌아오는 것은 페이지 콘텐츠 문제가 아니라 CDP 쪽 사정이므로,
+          // 눈에 보이지 않는 이 데이터 하나 때문에 이미 수집한 failedRequests까지
+          // 버리고 전체 페이지 run을 abort시키면 안 된다 — 빈 목록으로 degrade한다.
+          return freezeResources([], [], failedRequests);
+        }
+        const resources = readResourcesFromSnapshot(snapshot);
         return freezeResources(
           resources.scripts,
           resources.stylesheets,

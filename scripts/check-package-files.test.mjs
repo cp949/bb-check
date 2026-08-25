@@ -867,11 +867,17 @@ test("bin target과 declaration이 모두 있으면 문제가 없다", async () 
   assert.doesNotMatch(result.problems.join("\n"), /packages\/bin-complete/u);
 });
 
-test("next-webpack-baseline generated LICENSE는 Git ignore 대상이다", () => {
+test("공개 package들의 generated LICENSE는 모두 Git ignore 대상이다", () => {
   const repoRoot = new URL("..", import.meta.url);
-  const path = "packages/next-webpack-baseline/LICENSE";
-  const result = spawnSync("git", ["check-ignore", "-q", path], {
-    cwd: repoRoot,
-  });
-  assert.equal(result.status, 0, `${path}가 ignore되지 않았다.`);
+  const publicPackageWorkspacePaths = [
+    "packages/next-webpack-baseline",
+    "packages/legacy-browser-smoke",
+  ];
+  for (const workspacePath of publicPackageWorkspacePaths) {
+    const path = `${workspacePath}/LICENSE`;
+    const result = spawnSync("git", ["check-ignore", "-q", path], {
+      cwd: repoRoot,
+    });
+    assert.equal(result.status, 0, `${path}가 ignore되지 않았다.`);
+  }
 });

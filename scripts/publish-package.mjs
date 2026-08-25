@@ -4,6 +4,10 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDirectory = resolve(import.meta.dirname, "..");
+// @cp949/legacy-browser-smoke를 이 allowlist에 추가하려면 같은 변경에서 root
+// verify:package-release에 `npm run test-packed-package -- --package
+// @cp949/legacy-browser-smoke`를 추가해야 한다(현재 publish 게이트는
+// next-webpack-baseline tarball만 검증한다).
 const allowedPackages = new Map([
   ["@cp949/next-webpack-baseline", "packages/next-webpack-baseline"],
 ]);
