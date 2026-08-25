@@ -1,0 +1,33 @@
+{
+  "name": "@cp949/next-webpack-baseline",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/**",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vite build && rollup -c rollup.dts.config.mjs",
+    "prepack": "node ../../scripts/copy-root-license.mjs",
+    "prepublishOnly": "npm --prefix ../.. run verify:package-release",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint . --no-error-on-unmatched-pattern"
+  }
+}

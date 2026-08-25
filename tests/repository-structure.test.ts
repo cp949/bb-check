@@ -5,8 +5,8 @@ const readJson = async (path: string) =>
   JSON.parse(await readFile(path, "utf8"));
 
 describe("workspace 공개 경계", () => {
-  it("bb-check만 공개 패키지다", async () => {
-    const names = ["core", "bb-library", "bb-nextjs", "bb-check"];
+  it("bb-check와 next-webpack-baseline은 독립 공개 패키지다", async () => {
+    const names = ["core", "bb-library", "bb-check", "next-webpack-baseline"];
     const manifests = await Promise.all(
       names.map((name) => readJson(`packages/${name}/package.json`)),
     );
@@ -16,8 +16,8 @@ describe("workspace 공개 경계", () => {
     ).toEqual([
       ["@cp949/bb-core", true],
       ["@cp949/bb-library", true],
-      ["@cp949/bb-nextjs", true],
       ["@cp949/bb-check", false],
+      ["@cp949/next-webpack-baseline", false],
     ]);
   });
 
