@@ -14,8 +14,11 @@ import { fileURLToPath } from "node:url";
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  createNpmInvocation,
   listPublicPackageDirs,
+  listTarballRoots,
   listTrackedFiles,
+  parsePackResult,
   runScanner,
 } from "./check-public-words.mjs";
 
@@ -47,6 +50,164 @@ test("tracked scan은 공개 README와 next package 파일로 제한한다", () 
         file === "README.md" ||
         file.startsWith("packages/next-webpack-baseline/"),
     ),
+  );
+});
+
+test("Windows npm pack은 shell 없이 npm CLI를 Node로 실행한다", () => {
+  assert.deepEqual(
+    createNpmInvocation(["pack", "--dry-run", "--json"], {
+      platform: "win32",
+      npmExecPath: "C:/npm/npm-cli.js",
+      nodeExecPath: "C:/node/node.exe",
+    }),
+    {
+      command: "C:/node/node.exe",
+      args: ["C:/npm/npm-cli.js", "pack", "--dry-run", "--json"],
+    },
+  );
+  assert.throws(
+    () =>
+      createNpmInvocation([], {
+        platform: "win32",
+        npmExecPath: "",
+        nodeExecPath: "C:/node/node.exe",
+      }),
+    /npm_execpath/u,
+  );
+});
+
+test("npm pack 결과의 identity와 contained POSIX file path를 검증한다", () => {
+  const valid = {
+    status: 0,
+    stdout: JSON.stringify([
+      {
+        name: "@cp949/next-webpack-baseline",
+        version: "0.1.0",
+        files: [{ path: "dist/index.js" }, { path: "README.md" }],
+      },
+    ]),
+    stderr: "",
+  };
+  assert.deepEqual(
+    parsePackResult(valid, {
+      packageName: "@cp949/next-webpack-baseline",
+      version: "0.1.0",
+      packageRelDir: "packages/next-webpack-baseline",
+    }),
+    [
+      "packages/next-webpack-baseline/dist/index.js",
+      "packages/next-webpack-baseline/README.md",
+    ],
+  );
+
+  const invalidEntries = [
+    [],
+    [{ name: "@cp949/next-webpack-baseline", version: "0.1.0", files: [] }],
+    [
+      {
+        name: "@cp949/wrong",
+        version: "0.1.0",
+        files: [{ path: "dist/index.js" }],
+      },
+    ],
+    [
+      {
+        name: "@cp949/next-webpack-baseline",
+        version: "9.9.9",
+        files: [{ path: "dist/index.js" }],
+      },
+    ],
+    [
+      {
+        name: "@cp949/next-webpack-baseline",
+        version: "0.1.0",
+        files: [{ path: "dist/index.js" }],
+      },
+      {
+        name: "@cp949/next-webpack-baseline",
+        version: "0.1.0",
+        files: [{ path: "README.md" }],
+      },
+    ],
+  ];
+  for (const entry of invalidEntries) {
+    assert.throws(
+      () =>
+        parsePackResult(
+          { status: 0, stdout: JSON.stringify(entry), stderr: "" },
+          {
+            packageName: "@cp949/next-webpack-baseline",
+            version: "0.1.0",
+            packageRelDir: "packages/next-webpack-baseline",
+          },
+        ),
+      /BB_PUBLIC_PACK_INVALID/u,
+    );
+  }
+
+  for (const path of [
+    "",
+    ".",
+    "..",
+    "/absolute.js",
+    "C:/absolute.js",
+    "C:drive-relative.js",
+    "dist\\index.js",
+    "dist//index.js",
+    "dist/./index.js",
+    "dist/../index.js",
+    "dist/%2e%2e/index.js",
+  ]) {
+    assert.throws(
+      () =>
+        parsePackResult(
+          {
+            status: 0,
+            stdout: JSON.stringify([
+              {
+                name: "@cp949/next-webpack-baseline",
+                version: "0.1.0",
+                files: [{ path }],
+              },
+            ]),
+            stderr: "",
+          },
+          {
+            packageName: "@cp949/next-webpack-baseline",
+            version: "0.1.0",
+            packageRelDir: "packages/next-webpack-baseline",
+          },
+        ),
+      /BB_PUBLIC_PACK_INVALID/u,
+    );
+  }
+});
+
+test("tarball 수집은 주입된 npm 경계의 검증된 결과만 사용한다", async () => {
+  const calls = [];
+  const roots = await listTarballRoots({
+    runCommand(command, args, options) {
+      calls.push({ command, args, cwd: options.cwd });
+      return {
+        status: 0,
+        stdout: JSON.stringify([
+          {
+            name: "@cp949/next-webpack-baseline",
+            version: "0.1.0",
+            files: [{ path: "dist/index.js" }],
+          },
+        ]),
+        stderr: "",
+      };
+    },
+  });
+
+  assert.deepEqual(roots, ["packages/next-webpack-baseline/dist/index.js"]);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ["pack", "--dry-run", "--json"]);
+  assert.match(
+    calls[0].cwd.replaceAll("\\", "/"),
+    /packages\/next-webpack-baseline$/u,
   );
 });
 
@@ -135,6 +296,17 @@ describe("runScanner: binary-safe", () => {
       assert.deepEqual(result.matches, [
         { file: "README.md", line: 1, pattern: "private-product" },
       ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("유효하지 않은 UTF-8 파일도 skipped에 보고한다", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bb-check-public-words-utf8-"));
+    try {
+      await writeFile(join(dir, "invalid.txt"), Buffer.from([0xc3, 0x28]));
+      const result = await runScanner({ roots: [dir], patterns: [] });
+      assert.deepEqual(result.skipped, ["invalid.txt"]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -240,6 +412,9 @@ describe("check-public-words.mjs CLI: dist/**(tarball-only) 경로", () => {
   const distDir = join(nextPackageDir, "dist");
   const plantedFileName = "__i6-synthetic-forbidden-probe.js";
   const plantedFile = join(distDir, plantedFileName);
+  const pathPattern = ["zz-path-secret", "-41c8"].join("");
+  const pathLeakFile = join(distDir, `${pathPattern}.js`);
+  const binaryFile = join(distDir, "__binary-release-probe.bin");
   let distDirPreexisted;
 
   before(async () => {
@@ -250,6 +425,8 @@ describe("check-public-words.mjs CLI: dist/**(tarball-only) 경로", () => {
 
   after(async () => {
     await rm(plantedFile, { force: true });
+    await rm(pathLeakFile, { force: true });
+    await rm(binaryFile, { force: true });
     if (!distDirPreexisted) await rm(distDir, { recursive: true, force: true });
   });
 
@@ -283,15 +460,38 @@ describe("check-public-words.mjs CLI: dist/**(tarball-only) 경로", () => {
       "합성 pattern을 심었는데도 --release가 통과했다 — dist/**(tarball-only) " +
         `경로가 스캔되지 않는다.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
     );
-    // matches 로그는 pattern 원문이 아니라 file 경로만 남긴다 — 그 file이
-    // git-tracked 경로(README.md 등)가 아니라 tarball 쪽 경로
-    // next package의 dist 경로임을 직접 확인해, 다른 tracked 파일이 아니라
-    // 정확히 이 dist 파일을 통해서
-    // 잡혔음을 증명한다.
-    const expectedRoot = `packages/next-webpack-baseline/dist/${plantedFileName}`;
-    assert.match(
-      result.stderr,
-      new RegExp(expectedRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    assert.match(result.stderr, /pattern\[0\] source\[0\] line 1/u);
+    assert.doesNotMatch(result.stderr, new RegExp(plantedFileName));
+  });
+
+  test("금지 pattern이 file path에 있어도 CLI 출력에서 원문을 숨긴다", async () => {
+    await writeFile(pathLeakFile, `// ${pathPattern}\n`, "utf8");
+    const result = spawnSync(process.execPath, [scriptPath, "--release"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...process.env, BB_CHECK_FORBIDDEN_WORDS: pathPattern },
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stdout + result.stderr, new RegExp(pathPattern));
+  });
+
+  test("release mode는 binary skipped 파일이 하나라도 있으면 차단한다", async () => {
+    await writeFile(binaryFile, Buffer.from([0x00, 0xff, 0xfe]));
+    const result = spawnSync(process.execPath, [scriptPath, "--release"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BB_CHECK_FORBIDDEN_WORDS: ABSENT_SYNTHETIC_PATTERN,
+      },
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /BB_PUBLIC_WORDS_BINARY/u);
+    assert.doesNotMatch(
+      result.stdout + result.stderr,
+      /__binary-release-probe/u,
     );
   });
 });

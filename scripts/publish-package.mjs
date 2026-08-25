@@ -47,12 +47,13 @@ export function createCommandInvocation(
   return { command: process.execPath, args: [npmExecPath, ...args] };
 }
 
-function run(command, args, { capture = false } = {}) {
+function run(command, args, { capture = false, env = process.env } = {}) {
   const invocation = createCommandInvocation(command, args);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: rootDirectory,
     encoding: "utf8",
     stdio: capture ? "pipe" : "inherit",
+    env,
   });
 
   if (result.error) throw result.error;
@@ -63,6 +64,8 @@ export function parsePublishArguments(argv) {
   let packageName;
   let publish = false;
   let confirmed = false;
+  let explicitDryRun = false;
+  const seenActionFlags = new Set();
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -78,13 +81,26 @@ export function parsePublishArguments(argv) {
       continue;
     }
     if (argument === "--dry-run") {
+      if (seenActionFlags.has(argument)) {
+        throw new Error(`${argument} 중복은 허용하지 않습니다.`);
+      }
+      seenActionFlags.add(argument);
+      explicitDryRun = true;
       continue;
     }
     if (argument === "--publish") {
+      if (seenActionFlags.has(argument)) {
+        throw new Error(`${argument} 중복은 허용하지 않습니다.`);
+      }
+      seenActionFlags.add(argument);
       publish = true;
       continue;
     }
     if (argument === "--confirm-publish") {
+      if (seenActionFlags.has(argument)) {
+        throw new Error(`${argument} 중복은 허용하지 않습니다.`);
+      }
+      seenActionFlags.add(argument);
       confirmed = true;
       continue;
     }
@@ -94,6 +110,9 @@ export function parsePublishArguments(argv) {
   if (packageName === undefined) {
     throw new Error("--package로 배포 package 이름을 명시하세요.");
   }
+  if (explicitDryRun && publish) {
+    throw new Error("--dry-run과 --publish는 함께 사용할 수 없습니다.");
+  }
   if (publish && !confirmed) {
     throw new Error("실제 publish에는 --confirm-publish가 필요합니다.");
   }
@@ -102,6 +121,23 @@ export function parsePublishArguments(argv) {
   }
   return { packageName, dryRun: !publish, confirmed };
 }
+
+export function validatePublishLifecycle(environment) {
+  if (
+    environment.npm_config_dry_run === "true" ||
+    environment.NWB_PUBLISH_CONFIRMED === "1"
+  ) {
+    return;
+  }
+  throw new Error(
+    "[NWB_PUBLISH_DIRECT_DENIED] 실제 publish는 root publish:npm wrapper로만 실행하세요.",
+  );
+}
+
+const hasReleasePatterns = (environment) =>
+  (environment.BB_CHECK_FORBIDDEN_WORDS ?? "")
+    .split(",")
+    .some((word) => word.trim().length > 0);
 
 export function classifyRegistryVersionResult(result) {
   if (result.status === 0) {
@@ -148,10 +184,15 @@ export function publishPackage(
   runCommand = run,
   selectedPackage = defaultSelectedPackage,
   confirmed = false,
+  environment = process.env,
 ) {
   const { packageName, publishSpec } = selectedPackage;
   if (!dryRun && !confirmed) {
     console.log("실제 publish confirmation이 없어 배포를 중단합니다.");
+    return false;
+  }
+  if (!dryRun && !hasReleasePatterns(environment)) {
+    console.log("release forbidden pattern이 없어 실제 배포를 중단합니다.");
     return false;
   }
   const plan = planPublish({ dryRun, registryLookup, packageName });
@@ -168,8 +209,19 @@ export function publishPackage(
   }
 
   if (!dryRun) {
+    console.log("\n$ npm run check-public-words -- --release");
+    const publicWords = runCommand(
+      "npm",
+      ["run", "check-public-words", "--", "--release"],
+      { env: environment },
+    );
+    if (publicWords.status !== 0) {
+      console.log("\nrelease 공개 문자열 검증에 실패해 배포를 중단합니다.");
+      return false;
+    }
+
     console.log("\n$ npm whoami");
-    const authenticated = runCommand("npm", ["whoami"]);
+    const authenticated = runCommand("npm", ["whoami"], { env: environment });
     if (authenticated.status !== 0) {
       console.log("\nnpm 인증을 확인할 수 없어 실제 배포를 중단합니다.");
       return false;
@@ -180,7 +232,9 @@ export function publishPackage(
   if (dryRun) args.push("--dry-run");
 
   console.log(`\n$ npm ${args.join(" ")}`);
-  const published = runCommand("npm", args);
+  const published = runCommand("npm", args, {
+    env: dryRun ? environment : { ...environment, NWB_PUBLISH_CONFIRMED: "1" },
+  });
   if (published.status !== 0) {
     console.log(`\n${packageName} 배포에 실패했습니다.`);
     return false;
@@ -203,7 +257,15 @@ function readRegistryVersion(packageName, version) {
 }
 
 async function main() {
-  const options = parsePublishArguments(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  if (argv.length === 1 && argv[0] === "--lifecycle-guard") {
+    validatePublishLifecycle(process.env);
+    return;
+  }
+  const options = parsePublishArguments(argv);
+  if (!options.dryRun && !hasReleasePatterns(process.env)) {
+    throw new Error("실제 publish에는 BB_CHECK_FORBIDDEN_WORDS가 필요합니다.");
+  }
   const packageDirectory = allowedPackages.get(options.packageName);
   if (packageDirectory === undefined) {
     throw new Error(`허용하지 않은 package입니다: ${options.packageName}`);
@@ -229,6 +291,7 @@ async function main() {
       run,
       selectedPackage,
       options.confirmed,
+      process.env,
     )
   ) {
     process.exitCode = 1;

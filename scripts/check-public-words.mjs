@@ -32,6 +32,23 @@ import { spawnSync } from "node:child_process";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
+export function createNpmInvocation(
+  args,
+  {
+    platform = process.platform,
+    npmExecPath = process.env.npm_execpath,
+    nodeExecPath = process.execPath,
+  } = {},
+) {
+  if (platform !== "win32") return { command: "npm", args };
+  if (typeof npmExecPath !== "string" || npmExecPath.length === 0) {
+    throw new Error(
+      "Windows에서는 npm_execpath가 필요합니다. npm run check-public-words로 실행하세요.",
+    );
+  }
+  return { command: nodeExecPath, args: [npmExecPath, ...args] };
+}
+
 // ---- binary-safe scanning primitive ----------------------------------------
 
 /** NUL byte를 포함하거나 유효한 UTF-8이 아니면 binary로 본다. */
@@ -189,49 +206,99 @@ export const listPublicPackageDirs = async () => {
   return [packageDir];
 };
 
+const invalidPack = (message) => {
+  throw new Error(`[BB_PUBLIC_PACK_INVALID] ${message}`);
+};
+
+const validatePackedPath = (value) => {
+  if (typeof value !== "string" || value.length === 0) {
+    return invalidPack("file.path는 비어 있지 않은 문자열이어야 합니다.");
+  }
+  if (
+    value.includes("\\") ||
+    value.includes("%") ||
+    value.startsWith("/") ||
+    /^[A-Za-z]:/u.test(value) ||
+    value.includes("\0")
+  ) {
+    return invalidPack("file.path는 안전한 POSIX 상대 경로여야 합니다.");
+  }
+  const segments = value.split("/");
+  if (
+    segments.some(
+      (segment) => segment === "" || segment === "." || segment === "..",
+    )
+  ) {
+    return invalidPack("file.path는 안전한 POSIX 상대 경로여야 합니다.");
+  }
+  return value;
+};
+
+export function parsePackResult(
+  result,
+  { packageName, version, packageRelDir },
+) {
+  if (result.error || result.status !== 0) {
+    return invalidPack("npm pack 실행이 실패했습니다.");
+  }
+  let output;
+  try {
+    output = JSON.parse(result.stdout);
+  } catch {
+    return invalidPack("npm pack 출력을 JSON으로 파싱할 수 없습니다.");
+  }
+  if (!Array.isArray(output) || output.length !== 1) {
+    return invalidPack("npm pack 결과는 정확히 한 package여야 합니다.");
+  }
+  const [entry] = output;
+  if (
+    typeof entry !== "object" ||
+    entry === null ||
+    entry.name !== packageName ||
+    entry.version !== version
+  ) {
+    return invalidPack("npm pack package identity가 manifest와 다릅니다.");
+  }
+  if (!Array.isArray(entry.files) || entry.files.length === 0) {
+    return invalidPack("npm pack files는 비어 있지 않은 배열이어야 합니다.");
+  }
+  return entry.files.map((file) => {
+    if (typeof file !== "object" || file === null) {
+      return invalidPack("npm pack file entry는 object여야 합니다.");
+    }
+    return `${packageRelDir}/${validatePackedPath(file.path)}`;
+  });
+}
+
 /**
  * 공개 package마다 `npm pack --dry-run --json`을 실행해, 그 tarball에
  * 포함될 파일들을 repoRoot 기준 상대 경로(root 문자열) 목록으로 만든다.
  */
-const listTarballRoots = async () => {
+export const listTarballRoots = async ({ runCommand = spawnSync } = {}) => {
   const roots = [];
   for (const packageDir of await listPublicPackageDirs()) {
-    const result = spawnSync("npm", ["pack", "--dry-run", "--json"], {
+    const args = ["pack", "--dry-run", "--json"];
+    const invocation = createNpmInvocation(args);
+    const result = runCommand(invocation.command, invocation.args, {
       cwd: packageDir,
       encoding: "utf8",
-      // Windows(cmd.exe)에서는 npm.cmd를 shell 경유로 찾아야 한다. args는
-      // 고정 literal이라 shell injection 위험이 없다.
-      shell: process.platform === "win32",
     });
-    if (result.error) {
-      throw new Error(
-        `npm pack 실행 실패(${packageDir}): ${result.error.message}`,
-      );
-    }
-    if (result.status !== 0) {
-      throw new Error(
-        `npm pack --dry-run --json이 exit ${result.status}로 종료했습니다(${packageDir}).\nstderr:\n${result.stderr}`,
-      );
-    }
     let manifest;
     try {
-      manifest = JSON.parse(result.stdout);
-    } catch (cause) {
-      throw new Error(
-        `npm pack --dry-run --json 출력을 JSON으로 파싱하지 못했습니다(${packageDir}).`,
-        { cause },
+      manifest = JSON.parse(
+        await readFile(join(packageDir, "package.json"), "utf8"),
       );
-    }
-    const [entry] = manifest;
-    if (!entry || !Array.isArray(entry.files)) {
-      throw new Error(
-        `npm pack --dry-run --json 출력 형식이 예상과 다릅니다(${packageDir}).`,
-      );
+    } catch {
+      return invalidPack("package manifest를 읽을 수 없습니다.");
     }
     const packageRelDir = relative(repoRoot, packageDir).split(sep).join("/");
-    for (const file of entry.files) {
-      roots.push(`${packageRelDir}/${file.path}`);
-    }
+    roots.push(
+      ...parsePackResult(result, {
+        packageName: manifest.name,
+        version: manifest.version,
+        packageRelDir,
+      }),
+    );
   }
   return roots;
 };
@@ -243,6 +310,13 @@ const parsePatterns = () => {
     .split(",")
     .map((word) => word.trim())
     .filter((word) => word.length > 0);
+};
+
+const redactPatterns = (message, patterns) => {
+  let redacted = message;
+  for (const pattern of patterns)
+    redacted = redacted.replaceAll(pattern, "[redacted]");
+  return redacted;
 };
 
 // ---- CLI 진입점 --------------------------------------------------------------
@@ -270,6 +344,14 @@ async function main() {
     cwd: repoRoot,
   });
 
+  if (release && skipped.length > 0) {
+    console.error(
+      `[BB_PUBLIC_WORDS_BINARY] release 공개 파일 ${skipped.length}개를 text로 검증할 수 없습니다.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   if (patterns.length === 0) {
     console.log(
       `check-public-words: 제네릭 모드(pattern 0개) — 파일 ${roots.length}개 수집, ` +
@@ -284,10 +366,12 @@ async function main() {
     console.error(
       `check-public-words: FAIL (금지 pattern ${matches.length}건)\n`,
     );
-    for (const match of matches) {
+    matches.forEach((match, index) => {
       const patternIndex = patterns.indexOf(match.pattern);
-      console.error(`  - pattern[${patternIndex}] ${match.file}:${match.line}`);
-    }
+      console.error(
+        `  - pattern[${patternIndex}] source[${index}] line ${match.line}`,
+      );
+    });
     process.exitCode = 1;
     return;
   }
@@ -304,5 +388,11 @@ const isMainModule =
   process.argv[1] !== undefined &&
   pathToFileURL(process.argv[1]).href === import.meta.url;
 if (isMainModule) {
-  await main();
+  try {
+    await main();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(redactPatterns(message, parsePatterns()));
+    process.exitCode = 1;
+  }
 }

@@ -41,10 +41,13 @@ package 이름을 반드시 명시하며 기본 동작은 dry-run이다.
 npm run publish:npm -- --package @cp949/next-webpack-baseline
 ```
 
-실제 publish는 `--publish --confirm-publish`를 모두 명시해야 하지만, CI는
-publish나 registry credential을 사용하지 않는다. 실제 배포 전 공개 문자열
-검사는 호출자가 `BB_CHECK_FORBIDDEN_WORDS` CSV를 주입해 `--release`로
-실행한다. 값은 로그에 출력하지 않는다.
+실제 publish는 `--publish --confirm-publish`를 모두 명시하고, 호출자가
+`BB_CHECK_FORBIDDEN_WORDS` CSV를 주입해야 한다. wrapper는 generic release
+gate와 `check-public-words -- --release`를 모두 통과한 뒤에만 publish를
+호출한다. package directory에서 직접 실행한 실제 `npm publish`는 lifecycle
+guard가 차단하며, direct `npm publish --dry-run`은 허용한다. 금지어와 금지어가
+포함된 파일 경로는 로그에 출력하지 않는다. CI는 publish, registry credential,
+secret release scan을 실행하지 않는다.
 
 Codiny pilot과 두 번째 소비자 pilot은 이 저장소 변경과 분리된 human gate다.
 두 번째 소비자 경로와 release 금지어 목록이 제공되기 전에는 실행하지 않는다.
