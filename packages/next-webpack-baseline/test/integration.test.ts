@@ -1,12 +1,24 @@
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const testDir = fileURLToPath(new URL(".", import.meta.url));
 const workspaceRoot = resolve(testDir, "../../..");
 const fixtureDir = resolve(workspaceRoot, "apps/next-pages-fixture");
+const fixturePackageSourceDir = resolve(fixtureDir, "packages/syntax-fixture");
+const installedFixturePackageDir = resolve(
+  workspaceRoot,
+  "node_modules/syntax-fixture",
+);
 const childTimeoutMs = 90_000;
 
 interface BuildResult {
@@ -81,7 +93,32 @@ const readArtifactTree = (root: string): string => {
     .join("\n");
 };
 
+const readNormalizedTraceFiles = (tracePath: string): readonly string[] => {
+  const trace = JSON.parse(readFileSync(tracePath, "utf8")) as unknown;
+  if (
+    typeof trace !== "object" ||
+    trace === null ||
+    !("files" in trace) ||
+    !Array.isArray(trace.files) ||
+    trace.files.some((file) => typeof file !== "string")
+  ) {
+    throw new Error("NWB_TEST_SERVER_TRACE_INVALID");
+  }
+  return trace.files.map((file) => resolve(dirname(tracePath), file));
+};
+
+const materializeRegistryLikeFixturePackage = (): void => {
+  if (!existsSync(installedFixturePackageDir)) {
+    throw new Error("NWB_TEST_FIXTURE_DEPENDENCY_MISSING");
+  }
+  rmSync(installedFixturePackageDir, { recursive: true, force: true });
+  cpSync(fixturePackageSourceDir, installedFixturePackageDir, {
+    recursive: true,
+  });
+};
+
 beforeAll(() => {
+  materializeRegistryLikeFixturePackage();
   const result = runNpm(
     ["run", "build", "--workspace=@cp949/next-webpack-baseline"],
     { env: process.env, timeout: childTimeoutMs },
@@ -91,6 +128,10 @@ beforeAll(() => {
 }, 110_000);
 
 describe.sequential("Next.js Pages Router Webpack integration", () => {
+  it("registry 설치처럼 물리적인 fixture package를 사용한다", () => {
+    expect(lstatSync(installedFixturePackageDir).isSymbolicLink()).toBe(false);
+  });
+
   it("npm_execpath가 없으면 shell fallback 없이 안정된 infrastructure 오류로 중단한다", () => {
     expect(() => npmExecPathFrom({})).toThrow("NWB_TEST_NPM_EXECPATH_MISSING");
   });
@@ -136,13 +177,15 @@ describe.sequential("Next.js Pages Router Webpack integration", () => {
 
     expectCompleted(result);
     expect(result.status, result.output).toBe(0);
-    const serverArtifacts = readArtifactTree(
-      resolve(fixtureDir, ".next/server"),
+    const serverTraceFiles = readNormalizedTraceFiles(
+      resolve(fixtureDir, ".next/server/pages/index.js.nft.json"),
     );
     const clientArtifacts = readArtifactTree(
       resolve(fixtureDir, ".next/static/chunks/pages"),
     );
-    expect(serverArtifacts).toContain("syntax-fixture/server");
+    expect(serverTraceFiles).toContain(
+      resolve(installedFixturePackageDir, "index.js"),
+    );
     expect(clientArtifacts).not.toContain("syntax fixture");
     expect(clientArtifacts).not.toContain("readFixture");
   }, 110_000);
