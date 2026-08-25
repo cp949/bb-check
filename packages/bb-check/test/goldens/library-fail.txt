@@ -1,8 +1,0 @@
-bb-check library 검사 결과
-기준선: chrome 90
-
-판정: 위반 3건, 일부 대상 미검사로 결과 불완전
-
-[syntax] *:- BB_SYNTAX_TARGET_UNAVAILABLE — 이 baseline에는 문법 target이 없어 검사를 건너뛰었습니다.
-[syntax] dist/index.js:12 syntax-divergence — baseline이 지원하지 않는 문법입니다(column 4, target: chrome90).
-[runtime-js] dist/index.js:20 structuredClone — chrome 90에서 지원되지 않는 런타임 API입니다. (원본: src/index.ts)

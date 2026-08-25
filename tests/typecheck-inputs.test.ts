@@ -4,9 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createNpmInvocation } from "./npm-command.js";
 
 const packagesWithTests = [
-  ["packages/core", "test/config.test.ts"],
-  ["packages/bb-library", "test/baseline.test.ts"],
-  ["packages/bb-check", "test/cli.test.ts"],
+  ["packages/next-webpack-baseline", "test/config.test.ts"],
 ] as const;
 
 describe("package typecheck 입력", () => {

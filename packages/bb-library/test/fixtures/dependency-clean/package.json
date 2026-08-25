@@ -1,9 +1,0 @@
-{
-  "name": "@fixture/dependency-clean",
-  "version": "1.0.0",
-  "private": true,
-  "exports": "./dist/index.js",
-  "peerDependencies": {
-    "peer-lib": "^1.0.0"
-  }
-}

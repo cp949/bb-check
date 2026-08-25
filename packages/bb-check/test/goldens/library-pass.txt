@@ -1,4 +1,0 @@
-bb-check library 검사 결과
-기준선: chrome 90, firefox 88
-
-판정: 통과

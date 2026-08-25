@@ -1,9 +1,0 @@
-{
-  "name": "clean-fixture",
-  "version": "1.0.0",
-  "private": true,
-  "browserslist": [
-    "Chrome >= 80"
-  ],
-  "exports": "./dist/index.js"
-}

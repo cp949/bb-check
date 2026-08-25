@@ -7,7 +7,7 @@ describe("npm Node 런처", () => {
       createNpmInvocation("C:/Program Files/nodejs/npm-cli.js", [
         "run",
         "typecheck",
-        "--workspace=packages/core",
+        "--workspace=@cp949/next-webpack-baseline",
         "--",
         "--listFiles",
       ]),
@@ -17,7 +17,7 @@ describe("npm Node 런처", () => {
         "C:/Program Files/nodejs/npm-cli.js",
         "run",
         "typecheck",
-        "--workspace=packages/core",
+        "--workspace=@cp949/next-webpack-baseline",
         "--",
         "--listFiles",
       ],

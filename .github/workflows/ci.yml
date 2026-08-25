@@ -13,7 +13,9 @@ permissions:
 
 jobs:
   ubuntu-node22:
-    name: ubuntu-node22 (next webpack baseline full gate)
+    # packages/bb-check, packages/bb-library, packages/core와 bb-check의 직접
+    # consumer인 apps/demo는 삭제 예정인 legacy 경계라 실행하지 않는다.
+    name: ubuntu-node22 (active non-legacy gate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,27 +29,36 @@ jobs:
       - name: install
         run: npm clean-install
 
-      - name: format
-        run: npm run format:check:next
+      - name: format non-legacy repository files
+        run: >-
+          npx prettier --check
+          .github/workflows/ci.yml .prettierrc.json eslint.config.js
+          README.md package.json tsconfig.base.json tsconfig.json turbo.json
+          tests/npm-command.ts tests/npm-command.test.ts
+          scripts
+          packages/next-webpack-baseline
+          apps/next-pages-fixture
 
-      - name: lint active workspaces and release scripts
+      - name: lint root, active workspaces, and release scripts
         run: |
+          npx eslint tests/npm-command.ts tests/npm-command.test.ts scripts --no-error-on-unmatched-pattern
           npm run lint --workspace=@cp949/next-webpack-baseline
           npm run lint --workspace=next-pages-fixture
-          npx eslint scripts --no-error-on-unmatched-pattern
 
       - name: typecheck active workspaces
         run: |
           npm run typecheck --workspace=@cp949/next-webpack-baseline
           npm run typecheck --workspace=next-pages-fixture
 
-      - name: build package and Next.js 16 Webpack fixture
+      - name: build active packages and Next.js 16 Webpack fixture
         run: |
           npm run build --workspace=@cp949/next-webpack-baseline
           npm run build --workspace=next-pages-fixture -- --webpack
 
-      - name: package and real Next.js integration tests
-        run: npm test --workspace=@cp949/next-webpack-baseline
+      - name: root and active package tests
+        run: |
+          npx vitest run tests/npm-command.test.ts
+          npm test --workspace=@cp949/next-webpack-baseline
 
       - name: release script tests
         run: npm run test:scripts:next
@@ -60,7 +71,7 @@ jobs:
       - name: public words generic scan
         run: npm run check-public-words
 
-      - name: build Node 20 tarball artifact
+      - name: build tarball for Node 20 runtime verification
         working-directory: packages/next-webpack-baseline
         run: |
           mkdir -p "${{ runner.temp }}/next-webpack-baseline-tgz"
