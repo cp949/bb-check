@@ -12,7 +12,82 @@ import {
   parsePublishArguments,
   planPublish,
   publishPackage,
+  selectPublishPackage,
 } from "./publish-package.mjs";
+
+test("배포 package 이름은 반드시 명시해야 한다", () => {
+  assert.throws(() => parsePublishArguments([]), /--package/);
+  assert.throws(() => parsePublishArguments(["--dry-run"]), /--package/);
+});
+
+test("허용하지 않은 package와 private package를 거부한다", () => {
+  assert.throws(
+    () => selectPublishPackage("@cp949/unknown", { private: false }),
+    /허용하지 않은 package/,
+  );
+  assert.throws(
+    () =>
+      selectPublishPackage("@cp949/next-webpack-baseline", { private: true }),
+    /private package/,
+  );
+  assert.throws(
+    () =>
+      selectPublishPackage("@cp949/next-webpack-baseline", { private: false }),
+    /manifest와 일치하지 않습니다/,
+  );
+});
+
+test("명시한 공개 package는 dry-run을 기본값으로 선택한다", () => {
+  assert.deepEqual(
+    parsePublishArguments(["--package", "@cp949/next-webpack-baseline"]),
+    {
+      packageName: "@cp949/next-webpack-baseline",
+      dryRun: true,
+      confirmed: false,
+    },
+  );
+});
+
+test("실제 publish는 publish와 confirm 플래그를 모두 요구한다", () => {
+  assert.throws(
+    () =>
+      parsePublishArguments([
+        "--package",
+        "@cp949/next-webpack-baseline",
+        "--publish",
+      ]),
+    /--confirm-publish/,
+  );
+  assert.deepEqual(
+    parsePublishArguments([
+      "--package",
+      "@cp949/next-webpack-baseline",
+      "--publish",
+      "--confirm-publish",
+    ]),
+    {
+      packageName: "@cp949/next-webpack-baseline",
+      dryRun: false,
+      confirmed: true,
+    },
+  );
+});
+
+test("실제 publish 함수도 confirmation 없이는 명령을 실행하지 않는다", () => {
+  const commands = [];
+  const succeeded = publishPackage(
+    "0.1.0",
+    false,
+    { status: "missing" },
+    (command, args) => {
+      commands.push([command, args]);
+      return { status: 0 };
+    },
+  );
+
+  assert.equal(succeeded, false);
+  assert.deepEqual(commands, []);
+});
 
 test("Windows에서는 npm CLI를 Node로 실행한다", () => {
   assert.deepEqual(
@@ -92,7 +167,7 @@ test("dry-run은 registry 조회 실패 상태에서도 허용한다", () => {
   );
 });
 
-test("배포 전에 release 전체 검증을 실행한다", () => {
+test("배포 전에 next package 전용 release 검증을 실행한다", () => {
   const commands = [];
   const succeeded = publishPackage(
     "0.1.0",
@@ -102,13 +177,18 @@ test("배포 전에 release 전체 검증을 실행한다", () => {
       commands.push([command, args]);
       return { status: 0 };
     },
+    undefined,
+    true,
   );
 
   assert.equal(succeeded, true);
   assert.deepEqual(commands, [
-    ["npm", ["run", "verify:release"]],
+    ["npm", ["run", "verify:next-release"]],
     ["npm", ["whoami"]],
-    ["npm", ["publish", "./packages/bb-check", "--access", "public"]],
+    [
+      "npm",
+      ["publish", "./packages/next-webpack-baseline", "--access", "public"],
+    ],
   ]);
 });
 
@@ -122,11 +202,13 @@ test("실제 배포는 npm 인증 실패 시 publish를 실행하지 않는다",
       commands.push([command, args]);
       return { status: commands.length === 2 ? 1 : 0 };
     },
+    undefined,
+    true,
   );
 
   assert.equal(succeeded, false);
   assert.deepEqual(commands, [
-    ["npm", ["run", "verify:release"]],
+    ["npm", ["run", "verify:next-release"]],
     ["npm", ["whoami"]],
   ]);
 });
@@ -144,7 +226,7 @@ test("release 전체 검증이 실패하면 publish를 실행하지 않는다", 
   );
 
   assert.equal(succeeded, false);
-  assert.deepEqual(commands, [["npm", ["run", "verify:release"]]]);
+  assert.deepEqual(commands, [["npm", ["run", "verify:next-release"]]]);
 });
 
 test("dry-run publish 명령에 --dry-run을 전달한다", () => {
@@ -162,34 +244,39 @@ test("dry-run publish 명령에 --dry-run을 전달한다", () => {
   assert.equal(succeeded, true);
   assert.deepEqual(commands[1], [
     "npm",
-    ["publish", "./packages/bb-check", "--access", "public", "--dry-run"],
+    [
+      "publish",
+      "./packages/next-webpack-baseline",
+      "--access",
+      "public",
+      "--dry-run",
+    ],
   ]);
 });
 
-test("인자가 없으면 메뉴를, --dry-run은 비대화형 배포를 선택한다", () => {
-  assert.deepEqual(parsePublishArguments([]), {
-    action: "menu",
-    dryRun: false,
-  });
-  assert.deepEqual(parsePublishArguments(["--dry-run"]), {
-    action: "publish",
-    dryRun: true,
-  });
-  assert.deepEqual(parsePublishArguments(["--publish"]), {
-    action: "publish",
-    dryRun: false,
-  });
+test("알 수 없는 인자와 중복 package 선택을 거부한다", () => {
   assert.throws(
-    () => parsePublishArguments(["--force"]),
+    () =>
+      parsePublishArguments([
+        "--package",
+        "@cp949/next-webpack-baseline",
+        "--force",
+      ]),
     /알 수 없는 인자입니다/,
   );
   assert.throws(
-    () => parsePublishArguments(["--publish", "--publish"]),
-    /--publish, --publish/,
+    () =>
+      parsePublishArguments([
+        "--package",
+        "@cp949/next-webpack-baseline",
+        "--package",
+        "@cp949/next-webpack-baseline",
+      ]),
+    /하나만/,
   );
 });
 
-test("package 직접 배포 gate는 root release 검증 실패를 전파한다", async () => {
+test("package 직접 배포 gate는 next release 검증 실패를 전파한다", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "bb-check-publish-gate-"));
   const marker = join(tempDir, "npm-args.json");
   const stub = join(tempDir, "npm-stub.mjs");
@@ -231,7 +318,7 @@ test("package 직접 배포 gate는 root release 검증 실패를 전파한다",
 
     const result = spawnSync(
       realNpm,
-      ["run", "prepublishOnly", "--workspace=@cp949/bb-check"],
+      ["run", "prepublishOnly", "--workspace=@cp949/next-webpack-baseline"],
       {
         cwd: rootDirectory,
         encoding: "utf8",
@@ -249,7 +336,7 @@ test("package 직접 배포 gate는 root release 검증 실패를 전파한다",
       "--prefix",
       "../..",
       "run",
-      "verify:package-release",
+      "verify:next-release",
     ]);
     assert.notEqual(result.status, 0);
   } finally {

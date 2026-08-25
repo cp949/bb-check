@@ -25,9 +25,9 @@
   "scripts": {
     "build": "vite build && rollup -c rollup.dts.config.mjs",
     "prepack": "node ../../scripts/copy-root-license.mjs",
-    "prepublishOnly": "npm --prefix ../.. run verify:package-release",
+    "prepublishOnly": "npm --prefix ../.. run verify:next-release",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --passWithNoTests --no-file-parallelism",
     "lint": "eslint . --no-error-on-unmatched-pattern"
   },
   "dependencies": {

@@ -1,12 +1,6 @@
 name: CI
 
-# 이 workflow는 검증만 한다. publish나 npm registry token 사용은 어디에도
-# 없다 — 실제 배포(npm publish, git tag)는 사람이 로컬에서 수행한다.
-#
-# 이 workflow는 이 세션에서 실행/검증하지 못했다(GitHub Actions runner가
-# 없는 환경에서 작성됨). YAML 문법과 각 job의 명령 자체는 로컬에서 실제로
-# 통과함을 확인했지만, 실제 GitHub Actions 위에서 도는지는 별도로
-# 확인해야 한다.
+# 검증 전용 workflow다. publish, registry token, secret release scan은 실행하지 않는다.
 
 on:
   push:
@@ -18,10 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  # Ubuntu + Node 22: 전체 gate. format/lint/typecheck/test부터 build,
-  # demo 재현, pack 검증, 공개 정보 "제네릭" gate까지 한 번에 돈다.
   ubuntu-node22:
-    name: ubuntu-node22 (full gate)
+    name: ubuntu-node22 (next webpack baseline full gate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,118 +27,84 @@ jobs:
       - name: install
         run: npm clean-install
 
-      - name: format:check
-        run: npm run format:check
+      - name: format
+        run: npm run format:check:next
 
-      - name: lint
-        run: npm run lint
-
-      - name: typecheck
-        run: npm run typecheck
-
-      - name: build
-        run: npm run build
-
-      - name: unit/integration test (vitest)
-        # build 이후에 돈다 — packages/bb-check/test/package-declaration-bundle.test.ts가
-        # packages/bb-check/dist/*.d.ts를 읽으므로, build 산출물이 먼저 있어야 한다.
-        run: npm test
-
-      - name: 공개 정보 scanner 자체의 unit/integration test
-        # scripts/check-public-words.test.mjs는 vitest가 아니라 Node 내장
-        # test runner로 돈다(root "test" script가 --exclude "scripts/**"로
-        # 이 파일을 제외한다) — 여기서 별도로 돌려 CI에서 계속 검증되게 한다.
-        run: node --test scripts/check-public-words.test.mjs
-
-      - name: demo build (fixture 생성)
-        run: npm run build --workspace=apps/demo
-
-      - name: demo 재현 — compatible fixture (exit 0이어야 함)
-        run: npm exec --workspace=apps/demo -- bb-check library check --config ./bb-check.config.mjs --dir ./fixtures/compatible
-
-      - name: demo 재현 — incompatible fixture (exit 1이어야 함)
-        # bb-check library check는 위반이면 exit 1이다. `! command`는 exit 2
-        # 같은 실행 오류도 성공으로 뒤집으므로, 여기서는 정확히 exit 1만 허용한다.
+      - name: lint active workspaces and release scripts
         run: |
-          set +e
-          npm exec --workspace=apps/demo -- bb-check library check --config ./bb-check.config.mjs --dir ./fixtures/incompatible
-          exit_code=$?
-          set -e
-          if [ "$exit_code" -ne 1 ]; then
-            echo "::error::incompatible fixture 검사가 exit $exit_code로 끝났다(exit 1을 기대함)."
-            exit 1
-          fi
+          npm run lint --workspace=@cp949/next-webpack-baseline
+          npm run lint --workspace=next-pages-fixture
+          npx eslint scripts --no-error-on-unmatched-pattern
 
-      - name: pack — package 파일 allowlist 검증
-        run: node scripts/check-package-files.mjs
+      - name: typecheck active workspaces
+        run: |
+          npm run typecheck --workspace=@cp949/next-webpack-baseline
+          npm run typecheck --workspace=next-pages-fixture
 
-      - name: pack — 격리 설치·실행 검증
-        run: node scripts/test-packed-package.mjs
+      - name: build package and Next.js 16 Webpack fixture
+        run: |
+          npm run build --workspace=@cp949/next-webpack-baseline
+          npm run build --workspace=next-pages-fixture -- --webpack
 
-      - name: 공개 정보 scanner — 제네릭 gate
-        # BB_CHECK_FORBIDDEN_WORDS는 CI에 두지 않는다(실제 forbidden word는
-        # 운영 비밀이며 이 저장소 어디에도 하드코딩하지 않는다). 여기서는
-        # --release 없이 실행해 git ls-files/npm pack 수집과 binary 판별·
-        # 매칭 메커니즘 자체가 깨지지 않았는지만 확인한다. 실제 배포 전
-        # --release gate는 사람이 로컬에서 BB_CHECK_FORBIDDEN_WORDS를 채워
-        # 수동으로 돌린다(이 workflow에는 없다).
-        run: node scripts/check-public-words.mjs
+      - name: package and real Next.js integration tests
+        run: npm test --workspace=@cp949/next-webpack-baseline
 
-      - name: Node 20 job이 쓸 tarball 만들기
-        working-directory: packages/bb-check
-        run: npm pack --pack-destination "${{ runner.temp }}/bb-check-tgz"
+      - name: release script tests
+        run: npm run test:scripts:next
+
+      - name: package files and packed consumer
+        run: |
+          npm run check-package-files
+          npm run test-packed-package -- --package @cp949/next-webpack-baseline
+
+      - name: public words generic scan
+        run: npm run check-public-words
+
+      - name: build Node 20 tarball artifact
+        working-directory: packages/next-webpack-baseline
+        run: |
+          mkdir -p "${{ runner.temp }}/next-webpack-baseline-tgz"
+          npm pack --pack-destination "${{ runner.temp }}/next-webpack-baseline-tgz"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: bb-check-tarball
-          path: ${{ runner.temp }}/bb-check-tgz/*.tgz
+          name: next-webpack-baseline-tarball
+          path: ${{ runner.temp }}/next-webpack-baseline-tgz/*.tgz
           if-no-files-found: error
           retention-days: 7
 
-  # Ubuntu + Node 20: ubuntu-node22가 만든 tarball을 내려받아, 그 안의
-  # dist/**를 그대로 복원한 뒤 packed-package runtime test만 돈다(install/
-  # lint/build 등은 하지 않는다). @cp949/bb-check의 package.json#engines
-  # (>=20) 계약에 따라, 이 job은 지원 범위인 Node 20에서 packed runtime을
-  # 실제로 설치·실행한다.
   ubuntu-node20-packed-runtime:
-    name: ubuntu-node20 (packed-package runtime only)
+    name: ubuntu-node20 (packed root import and facade)
     needs: ubuntu-node22
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - uses: actions/download-artifact@v4
         with:
-          name: bb-check-tarball
-          path: ${{ runner.temp }}/bb-check-tgz
+          name: next-webpack-baseline-tarball
+          path: ${{ runner.temp }}/next-webpack-baseline-tgz
 
-      - name: Node 22 tarball의 dist/**를 packages/bb-check/dist에 복원
+      - name: install artifact and exercise public root
         shell: bash
         run: |
           set -euo pipefail
-          tgz="$(ls "${{ runner.temp }}"/bb-check-tgz/*.tgz)"
-          extract_dir="${{ runner.temp }}/bb-check-tarball-extracted"
-          mkdir -p "$extract_dir"
-          tar -xzf "$tgz" -C "$extract_dir"
-          rm -rf packages/bb-check/dist
-          cp -R "$extract_dir/package/dist" packages/bb-check/dist
+          consumer="${{ runner.temp }}/next-webpack-baseline-consumer"
+          mkdir -p "$consumer"
+          cd "$consumer"
+          npm init -y
+          npm pkg set 'browserslist.production[0]=chrome 75'
+          npm install "${{ runner.temp }}"/next-webpack-baseline-tgz/*.tgz
+          node --input-type=module -e '
+            import { createNextWebpackBaseline, defineConfig } from "@cp949/next-webpack-baseline";
+            const facade = createNextWebpackBaseline(defineConfig({ projectDir: process.cwd(), policy: [] }));
+            if (!Array.isArray(facade.transpilePackages) || typeof facade.webpackPlugin !== "function") process.exit(1);
+          '
 
-      - name: packed-package runtime test
-        # 이 스크립트는 그 자체로 node: 내장 모듈만 쓰므로 root npm install
-        # 없이도 실행된다. 내부에서 다시 `npm pack`(위에서 복원한 dist/**
-        # 기준)과 격리된 임시 프로젝트에 대한 `npm install <tgz>`를 수행해
-        # Node 20 런타임에서 실제로 설치·실행되는지를 검증한다.
-        run: node scripts/test-packed-package.mjs
-
-  # Windows + Node 22: 전체 gate를 다시 돌리지 않는다. install과, path/
-  # dependency-closure에 민감한 테스트, 실제 CLI process 테스트만 초점을
-  # 맞춰 돈다.
   windows-node22:
-    name: windows-node22 (focused subset)
+    name: windows-node22 (path focused tests)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -160,22 +118,5 @@ jobs:
       - name: install
         run: npm clean-install
 
-      - name: build (bb-check만 — demo/bb-nextjs는 이 job의 범위 밖)
-        # @cp949/bb-core, @cp949/bb-library는 package.json#exports가
-        # ./src/index.ts를 직접 가리켜(private workspace package라 build
-        # 산출물이 필요 없다) bb-check의 vite build가 그 source를 바로
-        # inline 번들한다 — 별도로 먼저 build할 필요가 없다.
-        run: npm run build --workspace=packages/bb-check
-
-      - name: dependency-closure/경로 focused test
-        # dependency-closure.test.ts는 win32/POSIX 경로 판정을 호스트 OS의
-        # path 모듈에 기대지 않고 명시적으로 검사하도록 설계됐다(소스 주석
-        # 참고) — Windows에서 실제로 도는 게 중요한 파일이다. dist-entries/
-        # config-loader도 경로 해석이 핵심이라 함께 포함한다.
-        run: npx vitest run packages/bb-library/test/dependency-closure.test.ts packages/bb-library/test/dist-entries.test.ts packages/bb-check/test/config-loader.test.ts
-
-      - name: CLI process test (함수 호출 기반)
-        run: npx vitest run packages/bb-check/test/cli.test.ts
-
-      - name: CLI process test (실제 subprocess — pack/install/실행)
-        run: node scripts/test-packed-package.mjs
+      - name: downlevel and Webpack plugin tests
+        run: npx vitest run packages/next-webpack-baseline/test/downlevel.test.ts packages/next-webpack-baseline/test/webpack-plugin.test.ts

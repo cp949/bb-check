@@ -1,13 +1,37 @@
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 const rootDirectory = resolve(import.meta.dirname, "..");
-const packageName = "@cp949/bb-check";
-const packageDirectory = "packages/bb-check";
-const publishSpec = `./${packageDirectory}`;
+const allowedPackages = new Map([
+  ["@cp949/next-webpack-baseline", "packages/next-webpack-baseline"],
+]);
+const defaultSelectedPackage = {
+  packageName: "@cp949/next-webpack-baseline",
+  packageDirectory: "packages/next-webpack-baseline",
+  publishSpec: "./packages/next-webpack-baseline",
+};
+
+export function selectPublishPackage(packageName, manifest) {
+  const packageDirectory = allowedPackages.get(packageName);
+  if (packageDirectory === undefined) {
+    throw new Error(`허용하지 않은 package입니다: ${packageName}`);
+  }
+  if (manifest.private === true) {
+    throw new Error(`private package는 배포할 수 없습니다: ${packageName}`);
+  }
+  if (manifest.name !== packageName) {
+    throw new Error(
+      `package 이름이 manifest와 일치하지 않습니다: ${packageName}`,
+    );
+  }
+  return {
+    packageName,
+    packageDirectory,
+    publishSpec: `./${packageDirectory}`,
+  };
+}
 
 export function createCommandInvocation(
   command,
@@ -36,26 +60,47 @@ function run(command, args, { capture = false } = {}) {
 }
 
 export function parsePublishArguments(argv) {
-  const options = { action: "menu", dryRun: false };
+  let packageName;
+  let publish = false;
+  let confirmed = false;
 
-  for (const argument of argv) {
-    if (argument === "--dry-run") {
-      options.dryRun = true;
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === "--package") {
+      if (packageName !== undefined) {
+        throw new Error("--package는 하나만 지정하세요.");
+      }
+      packageName = argv[index + 1];
+      if (packageName === undefined || packageName.startsWith("--")) {
+        throw new Error("--package 뒤에 package 이름을 지정하세요.");
+      }
+      index += 1;
       continue;
     }
-    if (argument !== "--publish") {
-      throw new Error(`알 수 없는 인자입니다: ${argument}`);
+    if (argument === "--dry-run") {
+      continue;
     }
-    if (options.action !== "menu") {
-      throw new Error("동작 인자는 하나만 지정합니다: --publish, --publish");
+    if (argument === "--publish") {
+      publish = true;
+      continue;
     }
-    options.action = "publish";
+    if (argument === "--confirm-publish") {
+      confirmed = true;
+      continue;
+    }
+    throw new Error(`알 수 없는 인자입니다: ${argument}`);
   }
 
-  if (options.dryRun && options.action === "menu") {
-    options.action = "publish";
+  if (packageName === undefined) {
+    throw new Error("--package로 배포 package 이름을 명시하세요.");
   }
-  return options;
+  if (publish && !confirmed) {
+    throw new Error("실제 publish에는 --confirm-publish가 필요합니다.");
+  }
+  if (!publish && confirmed) {
+    throw new Error("--confirm-publish는 --publish와 함께 사용하세요.");
+  }
+  return { packageName, dryRun: !publish, confirmed };
 }
 
 export function classifyRegistryVersionResult(result) {
@@ -76,7 +121,11 @@ export function classifyRegistryVersionResult(result) {
   };
 }
 
-export function planPublish({ dryRun, registryLookup }) {
+export function planPublish({
+  dryRun,
+  registryLookup,
+  packageName = "package",
+}) {
   if (dryRun || registryLookup.status === "missing") {
     return { action: "proceed" };
   }
@@ -97,15 +146,22 @@ export function publishPackage(
   dryRun,
   registryLookup,
   runCommand = run,
+  selectedPackage = defaultSelectedPackage,
+  confirmed = false,
 ) {
-  const plan = planPublish({ dryRun, registryLookup });
+  const { packageName, publishSpec } = selectedPackage;
+  if (!dryRun && !confirmed) {
+    console.log("실제 publish confirmation이 없어 배포를 중단합니다.");
+    return false;
+  }
+  const plan = planPublish({ dryRun, registryLookup, packageName });
   if (plan.action === "abort") {
     console.log(plan.reason);
     return false;
   }
 
-  console.log("\n$ npm run verify:release");
-  const verified = runCommand("npm", ["run", "verify:release"]);
+  console.log("\n$ npm run verify:next-release");
+  const verified = runCommand("npm", ["run", "verify:next-release"]);
   if (verified.status !== 0) {
     console.log("\nrelease 전체 검증에 실패해 배포를 중단합니다.");
     return false;
@@ -138,7 +194,7 @@ export function publishPackage(
   return true;
 }
 
-function readRegistryVersion(version) {
+function readRegistryVersion(packageName, version) {
   return classifyRegistryVersionResult(
     run("npm", ["view", `${packageName}@${version}`, "version"], {
       capture: true,
@@ -146,64 +202,37 @@ function readRegistryVersion(version) {
   );
 }
 
-function formatRegistryStatus(lookup) {
-  if (lookup.status === "published") return `배포됨 (${lookup.version})`;
-  if (lookup.status === "missing") return "미배포";
-  return `조회 실패 (${lookup.reason})`;
-}
-
-async function runMenu(version) {
-  let registryLookup = readRegistryVersion(version);
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-
-  try {
-    for (;;) {
-      console.log(`\n=== ${packageName} 배포 도구 · release ${version} ===`);
-      console.log(`  registry: ${formatRegistryStatus(registryLookup)}`);
-      console.log("  1) 전체 검증");
-      console.log("  2) dry-run 배포");
-      console.log("  3) 배포");
-      console.log("  4) registry 상태 새로고침");
-      console.log("  q) 종료\n");
-
-      const choice = (await rl.question("선택: ")).trim().toLowerCase();
-      if (choice === "" || choice === "q") return;
-      if (choice === "1") run("npm", ["run", "verify:release"]);
-      else if (choice === "2") publishPackage(version, true, registryLookup);
-      else if (choice === "3") publishPackage(version, false, registryLookup);
-      else if (choice === "4") registryLookup = readRegistryVersion(version);
-      else console.log(`알 수 없는 선택입니다: ${choice}`);
-    }
-  } finally {
-    rl.close();
-  }
-}
-
 async function main() {
   const options = parsePublishArguments(process.argv.slice(2));
+  const packageDirectory = allowedPackages.get(options.packageName);
+  if (packageDirectory === undefined) {
+    throw new Error(`허용하지 않은 package입니다: ${options.packageName}`);
+  }
   const manifest = JSON.parse(
     await readFile(
       resolve(rootDirectory, packageDirectory, "package.json"),
       "utf8",
     ),
   );
+  const selectedPackage = selectPublishPackage(options.packageName, manifest);
   const version = manifest.version;
   if (typeof version !== "string" || version.length === 0) {
     throw new Error("release version이 비어 있습니다.");
   }
 
-  if (options.action === "publish") {
-    const registryLookup = readRegistryVersion(version);
-    if (!publishPackage(version, options.dryRun, registryLookup)) {
-      process.exitCode = 1;
-    }
-    return;
+  const registryLookup = readRegistryVersion(options.packageName, version);
+  if (
+    !publishPackage(
+      version,
+      options.dryRun,
+      registryLookup,
+      run,
+      selectedPackage,
+      options.confirmed,
+    )
+  ) {
+    process.exitCode = 1;
   }
-
-  if (!process.stdin.isTTY) {
-    throw new Error("대화형 메뉴를 쓸 수 없습니다. --publish를 지정하세요.");
-  }
-  await runMenu(version);
 }
 
 if (resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

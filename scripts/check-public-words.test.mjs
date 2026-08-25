@@ -8,28 +8,47 @@
 import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { runScanner } from "./check-public-words.mjs";
+import {
+  listPublicPackageDirs,
+  listTrackedFiles,
+  runScanner,
+} from "./check-public-words.mjs";
 
 const scriptPath = fileURLToPath(
   new URL("./check-public-words.mjs", import.meta.url),
 );
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
-// 이 테스트 파일 자신도 git-tracked 상태로 저장소에 포함된다(바로 이
-// scripts/check-public-words.test.mjs). 아래 "실제 저장소에 없는 합성
-// pattern" 테스트는 real repoRoot 전체를 --release로 스캔해 matches가
-// 0건임을 확인하는데, pattern 문자열을 이 파일 안에 온전한 substring으로
-// 그대로 적어두면 스캐너가 (자기 자신이 tracked file이므로) 그 자리를
-// 그대로 찾아내 self-match를 일으킨다 — 실제로 이 파일이 staged/tracked된
-// 뒤 재현됨(node --test와 vitest 양쪽에서 확인). 그래서 두 조각으로 나눠
-// 런타임에만 이어 붙인다: 완성된 pattern 문자열이 이 파일 소스 어디에도
-// 연속된 substring으로 나타나지 않는다.
+// 공개 파일에 없는 합성 pattern은 source에 완성된 문자열을 남기지 않도록
+// 두 조각으로 나눠 런타임에만 이어 붙인다.
 const ABSENT_SYNTHETIC_PATTERN = ["zz-test-forbidden", "-token-9f3c"].join("");
+
+test("공개 tarball scan 대상은 next webpack baseline 하나다", async () => {
+  assert.deepEqual(
+    (await listPublicPackageDirs()).map((path) =>
+      relative(repoRoot, path).replaceAll("\\", "/"),
+    ),
+    ["packages/next-webpack-baseline"],
+  );
+});
+
+test("tracked scan은 공개 README와 next package 파일로 제한한다", () => {
+  const files = listTrackedFiles();
+  assert.ok(files.includes("README.md"));
+  assert.ok(files.includes("packages/next-webpack-baseline/README.md"));
+  assert.ok(
+    files.every(
+      (file) =>
+        file === "README.md" ||
+        file.startsWith("packages/next-webpack-baseline/"),
+    ),
+  );
+});
 
 describe("runScanner", () => {
   let fixtureDir;
@@ -206,20 +225,19 @@ describe("check-public-words.mjs CLI: 제네릭 모드", () => {
 
 // dist/**는 .gitignore 대상이라 git ls-files로는 절대 보이지 않는다 —
 // 유일하게 도달 가능한 경로는 npm pack --dry-run --json이 알려주는 tarball
-// 파일 목록(listTarballRoots)뿐이다. 아래 테스트는 packages/bb-check/dist
+// 파일 목록(listTarballRoots)뿐이다. 아래 테스트는 next package의 dist
 // 안에 실제 파일을 하나 심어(tracked source 어디에도 없는 합성 pattern을
 // 담아) --release 스캔이 그 파일을 실제로 tarball-listing 경로로 찾아내는지
 // 확인한다 — "matches 배열에 뭔가 있다"가 아니라, git ls-files 쪽 경로가
-// 아니라 tarball 쪽 경로(packages/bb-check/dist/...)로 찾아냈음을 직접
-// 검증한다.
+// 아니라 next package tarball의 dist 경로로 찾아냈음을 직접 검증한다.
 describe("check-public-words.mjs CLI: dist/**(tarball-only) 경로", () => {
   // 다른 테스트의 ABSENT_SYNTHETIC_PATTERN과 절대 겹치지 않는 별도
   // pattern — 이 파일 소스 어디에도 완성된 형태로 나타나지 않도록 조각내
   // 런타임에만 이어 붙인다(위 ABSENT_SYNTHETIC_PATTERN과 같은 이유).
   const DIST_ONLY_SYNTHETIC_PATTERN = ["zz-dist-only-probe", "-c71a"].join("");
 
-  const bbCheckPackageDir = join(repoRoot, "packages", "bb-check");
-  const distDir = join(bbCheckPackageDir, "dist");
+  const nextPackageDir = join(repoRoot, "packages", "next-webpack-baseline");
+  const distDir = join(nextPackageDir, "dist");
   const plantedFileName = "__i6-synthetic-forbidden-probe.js";
   const plantedFile = join(distDir, plantedFileName);
   let distDirPreexisted;
@@ -267,10 +285,10 @@ describe("check-public-words.mjs CLI: dist/**(tarball-only) 경로", () => {
     );
     // matches 로그는 pattern 원문이 아니라 file 경로만 남긴다 — 그 file이
     // git-tracked 경로(README.md 등)가 아니라 tarball 쪽 경로
-    // (packages/bb-check/dist/...)임을 직접 확인해, "다른 어떤 tracked
-    // 파일에서 우연히 매칭됐다"가 아니라 정확히 이 dist 파일을 통해서
+    // next package의 dist 경로임을 직접 확인해, 다른 tracked 파일이 아니라
+    // 정확히 이 dist 파일을 통해서
     // 잡혔음을 증명한다.
-    const expectedRoot = `packages/bb-check/dist/${plantedFileName}`;
+    const expectedRoot = `packages/next-webpack-baseline/dist/${plantedFileName}`;
     assert.match(
       result.stderr,
       new RegExp(expectedRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),

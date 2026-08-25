@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // 공개 저장소에 내부 전용 식별자가 섞여 있지 않은지 검사한다. 두 소스를
 // 스캔한다:
-//   1. git으로 추적되는 모든 파일(`git ls-files -z`)
-//   2. 공개(private !== true) workspace package가 실제로 publish할
-//      tarball 파일 목록(각 package 디렉터리에서 `npm pack --dry-run
-//      --json`)
+//   1. root 공개 README와 next-webpack-baseline의 git 추적 파일
+//   2. @cp949/next-webpack-baseline이 실제로 publish할 tarball 파일 목록
+//      (`npm pack --dry-run --json`)
 //
 // 실제 forbidden pattern은 이 저장소 어디에도 하드코딩하지 않는다 — 반드시
 // comma-separated 환경변수 BB_CHECK_FORBIDDEN_WORDS로 호출 시점에 주입한다.
@@ -150,8 +149,8 @@ export async function runScanner({ roots, patterns, cwd = process.cwd() }) {
 
 // ---- 실제 파일 소스 수집(git-tracked / tarball) -----------------------------
 
-/** repoRoot에서 `git ls-files -z`로 추적 파일 목록(repoRoot 기준 POSIX 상대 경로)을 얻는다. */
-const listTrackedFiles = () => {
+/** 공개 README와 next package의 추적 파일 목록을 얻는다. */
+export const listTrackedFiles = () => {
   const result = spawnSync("git", ["ls-files", "-z"], {
     cwd: repoRoot,
     encoding: "utf8",
@@ -164,28 +163,30 @@ const listTrackedFiles = () => {
       `git ls-files -z가 exit ${result.status}로 종료했습니다.\n${result.stderr}`,
     );
   }
-  return result.stdout.split("\0").filter((entry) => entry.length > 0);
+  return result.stdout
+    .split("\0")
+    .filter(
+      (entry) =>
+        entry === "README.md" ||
+        entry.startsWith("packages/next-webpack-baseline/"),
+    );
 };
 
-/** packages/*에서 private !== true인(=publish 대상) package 디렉터리를 모은다. */
-const listPublicPackageDirs = async () => {
-  const packagesDir = join(repoRoot, "packages");
-  const entries = await readdir(packagesDir, { withFileTypes: true });
-  const dirs = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const packageDir = join(packagesDir, entry.name);
-    let manifest;
-    try {
-      manifest = JSON.parse(
-        await readFile(join(packageDir, "package.json"), "utf8"),
-      );
-    } catch {
-      continue; // package.json이 없거나 JSON이 아님: publish 대상이 아니다.
-    }
-    if (manifest.private !== true) dirs.push(packageDir);
+/** A8 release 대상인 공개 package 디렉터리만 검증해 반환한다. */
+export const listPublicPackageDirs = async () => {
+  const packageDir = join(repoRoot, "packages", "next-webpack-baseline");
+  const manifest = JSON.parse(
+    await readFile(join(packageDir, "package.json"), "utf8"),
+  );
+  if (
+    manifest.name !== "@cp949/next-webpack-baseline" ||
+    manifest.private === true
+  ) {
+    throw new Error(
+      "next-webpack-baseline 공개 package manifest가 올바르지 않습니다.",
+    );
   }
-  return dirs.sort();
+  return [packageDir];
 };
 
 /**
