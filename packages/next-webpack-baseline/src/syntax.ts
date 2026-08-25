@@ -132,12 +132,21 @@ export const findUnsupportedSyntax = (
   );
 };
 
-const parserIncomplete = (): SyntaxAnalysis => {
+const isMissingOneOfPlugins = (cause: unknown): boolean =>
+  typeof cause === "object" &&
+  cause !== null &&
+  "reasonCode" in cause &&
+  cause.reasonCode === "MissingOneOfPlugins";
+
+const parserIncomplete = (cause: unknown): SyntaxAnalysis => {
+  const category = isMissingOneOfPlugins(cause)
+    ? "지원하지 않는 parser mode가 남아 있습니다."
+    : "JavaScript 문법이 올바르지 않습니다.";
   return {
     diagnostics: [
       {
         code: "NWB_SYNTAX_PARSE_INCOMPLETE",
-        message: "JavaScript source를 완전히 parse할 수 없습니다.",
+        message: `JavaScript source를 완전히 parse할 수 없습니다: ${category}`,
       },
     ],
   };
@@ -150,8 +159,8 @@ export const analyzeSyntax = (
   let ast: unknown;
   try {
     ast = parse(source, { sourceType: "unambiguous" });
-  } catch {
-    return parserIncomplete();
+  } catch (cause) {
+    return parserIncomplete(cause);
   }
 
   return {

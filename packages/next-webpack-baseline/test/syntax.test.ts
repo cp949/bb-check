@@ -128,13 +128,33 @@ describe("analyzeSyntax", () => {
   });
 
   it.each([
-    "const score: number = 1;",
-    "const node = <main />;",
-    "const = ;",
-    "class Vault { #consumerSecret; #consumerSecret; }",
+    {
+      name: "잔류 TypeScript",
+      source: "const score: number = 1;",
+      message:
+        "JavaScript source를 완전히 parse할 수 없습니다: JavaScript 문법이 올바르지 않습니다.",
+    },
+    {
+      name: "잔류 JSX",
+      source: "const node = <main />;",
+      message:
+        "JavaScript source를 완전히 parse할 수 없습니다: 지원하지 않는 parser mode가 남아 있습니다.",
+    },
+    {
+      name: "손상된 JavaScript",
+      source: "const = ;",
+      message:
+        "JavaScript source를 완전히 parse할 수 없습니다: JavaScript 문법이 올바르지 않습니다.",
+    },
+    {
+      name: "중복 private identifier",
+      source: "class Vault { #consumerSecret; #consumerSecret; }",
+      message:
+        "JavaScript source를 완전히 parse할 수 없습니다: JavaScript 문법이 올바르지 않습니다.",
+    },
   ])(
-    "loader 후 JavaScript가 아닌 source는 NWB_SYNTAX_PARSE_INCOMPLETE로 중단한다",
-    (source) => {
+    "$name source는 NWB_SYNTAX_PARSE_INCOMPLETE의 안전한 category로 중단한다",
+    ({ source, message }) => {
       const analysis = analyzeSyntax(
         source,
         baselineFor(["optional-chaining"]),
@@ -143,7 +163,7 @@ describe("analyzeSyntax", () => {
       expect(analysis.diagnostics).toEqual([
         {
           code: "NWB_SYNTAX_PARSE_INCOMPLETE",
-          message: "JavaScript source를 완전히 parse할 수 없습니다.",
+          message,
         },
       ]);
       expect(analysis.diagnostics[0]?.message).not.toContain("consumerSecret");
