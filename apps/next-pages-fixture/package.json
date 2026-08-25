@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "build": "next build",
+    "build": "next build --webpack",
     "typecheck": "tsc --noEmit",
     "lint": "eslint next.config.mjs pages packages --no-error-on-unmatched-pattern"
   },

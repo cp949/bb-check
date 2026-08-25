@@ -14,7 +14,7 @@ package는 `transpilePackages` 후보로 제공하고, Webpack plugin은 transpi
 
 App Router 전용 graph 판정, Turbopack, 브라우저 runtime API, CSS 호환성은
 지원하지 않는다. Next.js 16에서는 반드시 `next build --webpack`으로
-Webpack build를 선택한다. 이 package는 삭제 예정인 기존 검사기와 의존성 및
+Webpack build를 선택한다. 이 package는 삭제 완료된 기존 검사기와 의존성 및
 제품 계약을 공유하지 않는 별도 제품이며, 그 검사기와의 호환성을 보장하지
 않는다.
 

@@ -51,7 +51,7 @@ jobs:
       - name: build active packages and Next.js 16 Webpack fixture
         run: |
           npm run build --workspace=@cp949/next-webpack-baseline
-          npm run build --workspace=next-pages-fixture -- --webpack
+          npm run build --workspace=next-pages-fixture
 
       - name: root and active package tests
         run: |

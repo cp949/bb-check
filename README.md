@@ -27,10 +27,10 @@ npm run test:scripts:next
 npm run check-public-words
 ```
 
-Next.js 16 통합 fixture는 Webpack을 명시해 실행한다.
+Next.js 16 통합 fixture는 build script에서 Webpack을 선택해 실행한다.
 
 ```bash
-npm run build --workspace=next-pages-fixture -- --webpack
+npm run build --workspace=next-pages-fixture
 ```
 
 ## 릴리스 안전장치

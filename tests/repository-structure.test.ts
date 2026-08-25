@@ -14,4 +14,19 @@ describe("workspace 공개 경계", () => {
       false,
     ]);
   });
+
+  it("Track A root와 fixture 검증 명령은 active package와 Webpack build를 선택한다", async () => {
+    const [fixtureManifest, rootManifest] = await Promise.all([
+      readJson("apps/next-pages-fixture/package.json"),
+      readJson("package.json"),
+    ]);
+
+    expect(fixtureManifest.scripts.build).toBe("next build --webpack");
+    expect(rootManifest.scripts.check).toContain(
+      "npm run test-packed-package -- --package @cp949/next-webpack-baseline",
+    );
+    expect(rootManifest.scripts["verify:package-release"]).toContain(
+      "npm run test-packed-package -- --package @cp949/next-webpack-baseline",
+    );
+  });
 });

@@ -48,13 +48,10 @@ const runNpm = (
 
 const buildFixture = (fixtureCase: string): BuildResult => {
   rmSync(resolve(fixtureDir, ".next"), { recursive: true, force: true });
-  return runNpm(
-    ["run", "build", "--workspace=next-pages-fixture", "--", "--webpack"],
-    {
-      env: { ...process.env, NWB_FIXTURE_CASE: fixtureCase },
-      timeout: childTimeoutMs,
-    },
-  );
+  return runNpm(["run", "build", "--workspace=next-pages-fixture"], {
+    env: { ...process.env, NWB_FIXTURE_CASE: fixtureCase },
+    timeout: childTimeoutMs,
+  });
 };
 
 const expectCompleted = (result: BuildResult): void => {
