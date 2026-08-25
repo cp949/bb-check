@@ -43,7 +43,7 @@ interface WebpackModule {
 }
 
 interface WebpackChunkGraph {
-  readonly getModuleChunks: (module: WebpackModule) => Iterable<unknown>;
+  readonly getModuleChunks: (module: WebpackModule) => unknown;
 }
 
 interface WebpackEntrypoints {
@@ -85,6 +85,18 @@ const readCompilationHook = (compiler: unknown): CompilationHook => {
     return unsupportedWebpack("public compilation hook을 사용할 수 없습니다.");
   }
   return hook as unknown as CompilationHook;
+};
+
+const readAfterSealHook = (compilation: unknown): AfterSealHook => {
+  if (
+    !isObject(compilation) ||
+    !isObject(compilation.hooks) ||
+    !isObject(compilation.hooks.afterSeal) ||
+    typeof compilation.hooks.afterSeal.tap !== "function"
+  ) {
+    return unsupportedWebpack("public afterSeal hook을 사용할 수 없습니다.");
+  }
+  return compilation.hooks.afterSeal as unknown as AfterSealHook;
 };
 
 const targetValues = (target: unknown): readonly string[] => {
@@ -148,43 +160,119 @@ const readCompilation = (value: unknown): WebpackCompilation => {
   return value as unknown as WebpackCompilation;
 };
 
+/**
+ * Webpack public Module type에는 합성 module의 inner-module 열거 API가 없다.
+ * class/path를 식별하지 않고 structural iterable만 지원하며 형상이 달라지면 fail-closed 한다.
+ */
 const sourceUnitsOf = function* (
   module: WebpackModule,
 ): Generator<WebpackModule> {
-  if (isIterable(module.modules)) {
-    for (const child of module.modules) {
-      if (isObject(child)) yield child;
+  let hasNestedModules: boolean;
+  try {
+    hasNestedModules = "modules" in module;
+  } catch {
+    return unsupportedWebpack("inner module container를 확인할 수 없습니다.");
+  }
+  if (hasNestedModules) {
+    let nestedModules: unknown;
+    try {
+      nestedModules = module.modules;
+    } catch {
+      return unsupportedWebpack("inner module container를 읽을 수 없습니다.");
     }
+    if (!isIterable(nestedModules)) {
+      return unsupportedWebpack("inner module container를 순회할 수 없습니다.");
+    }
+    let found = false;
+    try {
+      for (const child of nestedModules) {
+        if (!isObject(child)) {
+          return unsupportedWebpack("inner module 형상을 지원할 수 없습니다.");
+        }
+        found = true;
+        yield child;
+      }
+    } catch (cause) {
+      if (cause instanceof NextWebpackBaselineError) throw cause;
+      return unsupportedWebpack("inner module container를 순회할 수 없습니다.");
+    }
+    if (!found)
+      return unsupportedWebpack("inner module container가 비어 있습니다.");
     return;
   }
   yield module;
 };
 
-const loaderSourceOf = (module: WebpackModule): string | undefined => {
-  if (typeof module.originalSource !== "function") return undefined;
+type LoaderSourceResult =
+  | { readonly kind: "available"; readonly source: string }
+  | { readonly kind: "unavailable" };
+
+const loaderSourceOf = (module: WebpackModule): LoaderSourceResult => {
+  if (typeof module.originalSource !== "function") {
+    return { kind: "unavailable" };
+  }
   try {
     const source = module.originalSource();
     if (!isObject(source) || typeof source.source !== "function") {
-      return undefined;
+      return { kind: "unavailable" };
     }
     const value = source.source();
-    if (typeof value === "string") return value;
-    if (value instanceof Uint8Array) return Buffer.from(value).toString("utf8");
-    return undefined;
+    if (typeof value === "string") return { kind: "available", source: value };
+    if (value instanceof Uint8Array) {
+      return {
+        kind: "available",
+        source: Buffer.from(value).toString("utf8"),
+      };
+    }
+    return { kind: "unavailable" };
   } catch {
-    return undefined;
+    return { kind: "unavailable" };
   }
 };
 
 const parentsOf = (group: unknown): readonly unknown[] => {
-  if (!isObject(group) || typeof group.getParents !== "function") return [];
-  const parents = group.getParents();
-  return isIterable(parents) ? [...parents] : [];
+  if (!isObject(group) || typeof group.getParents !== "function") {
+    return unsupportedWebpack(
+      "public chunk group parent API를 사용할 수 없습니다.",
+    );
+  }
+  try {
+    const parents = group.getParents();
+    if (!isIterable(parents)) {
+      return unsupportedWebpack("chunk group parents를 순회할 수 없습니다.");
+    }
+    return [...parents];
+  } catch (cause) {
+    if (cause instanceof NextWebpackBaselineError) throw cause;
+    return unsupportedWebpack("chunk group parents를 읽을 수 없습니다.");
+  }
 };
 
 const groupsOf = (chunk: unknown): readonly unknown[] => {
-  if (!isObject(chunk) || !isIterable(chunk.groupsIterable)) return [];
-  return [...chunk.groupsIterable];
+  if (!isObject(chunk) || !isIterable(chunk.groupsIterable)) {
+    return unsupportedWebpack("public chunk groups를 순회할 수 없습니다.");
+  }
+  try {
+    return [...chunk.groupsIterable];
+  } catch {
+    return unsupportedWebpack("public chunk groups를 읽을 수 없습니다.");
+  }
+};
+
+const readModuleChunks = (
+  chunkGraph: WebpackChunkGraph,
+  module: WebpackModule,
+): Iterable<unknown> => {
+  try {
+    const chunks = chunkGraph.getModuleChunks(module);
+    if (!isIterable(chunks)) {
+      return unsupportedWebpack("module chunks를 순회할 수 없습니다.");
+    }
+    return chunks;
+  } catch (cause) {
+    if (cause instanceof NextWebpackBaselineError) throw cause;
+    return unsupportedWebpack("module chunks를 읽을 수 없습니다.");
+  }
 };
 
 const isPagesClientReachable = (
@@ -222,16 +310,26 @@ const createDiagnosticError = (
     `${packageName}/${entrypoint}: ${diagnostic.message}`,
   );
 
+const createSourceUnavailableError = (
+  packageName: string,
+  entrypoint: string,
+): NextWebpackBaselineError =>
+  new NextWebpackBaselineError(
+    NEXT_WEBPACK_BASELINE_ERROR_CODES.WEBPACK_UNSUPPORTED,
+    `${packageName}/${entrypoint}: loader 처리 후 JavaScript source를 읽을 수 없습니다.`,
+  );
+
 const inspectCompilation = (
   compilation: WebpackCompilation,
   input: WebpackPluginInput,
   cacheNamespace: "development" | "production",
 ): void => {
   const analyzed = new Set<string>();
+  const unavailableSources = new Set<string>();
   const pending: PendingError[] = [];
 
   for (const module of compilation.modules) {
-    const chunks = compilation.chunkGraph.getModuleChunks(module);
+    const chunks = readModuleChunks(compilation.chunkGraph, module);
     const isClientEntryReachable = isPagesClientReachable(
       chunks,
       compilation.entrypoints,
@@ -246,8 +344,33 @@ const inspectCompilation = (
       ) {
         continue;
       }
-      const source = loaderSourceOf(unit);
-      if (source === undefined) continue;
+      const eligibility = createVerdict({
+        config: input.config,
+        resource: unit.resource,
+        syntax: { diagnostics: [] },
+        isClientEntryReachable,
+      });
+      if (eligibility.status === "ignored") continue;
+      if (eligibility.resource === undefined) {
+        return unsupportedWebpack("module verdict resource가 없습니다.");
+      }
+
+      const loaded = loaderSourceOf(unit);
+      if (loaded.kind === "unavailable") {
+        const unavailableKey = `${eligibility.resource.package}\u0000${eligibility.resource.entrypoint}`;
+        if (!unavailableSources.has(unavailableKey)) {
+          unavailableSources.add(unavailableKey);
+          pending.push({
+            sortKey: `${unavailableKey}\u0000${NEXT_WEBPACK_BASELINE_ERROR_CODES.WEBPACK_UNSUPPORTED}`,
+            error: createSourceUnavailableError(
+              eligibility.resource.package,
+              eligibility.resource.entrypoint,
+            ),
+          });
+        }
+        continue;
+      }
+      const source = loaded.source;
 
       const hash = contentHash(source);
       const analysisKey = `${cacheNamespace}\u0000${unit.resource}\u0000${hash}`;
@@ -300,8 +423,9 @@ export const createWebpackPlugin = (
       if (!isClientCompiler(compiler)) return;
 
       compilationHook.tap(PLUGIN_NAME, (value) => {
-        const compilation = readCompilation(value);
-        compilation.hooks.afterSeal.tap(PLUGIN_NAME, () => {
+        const afterSealHook = readAfterSealHook(value);
+        afterSealHook.tap(PLUGIN_NAME, () => {
+          const compilation = readCompilation(value);
           inspectCompilation(compilation, input, cacheNamespace);
         });
       });

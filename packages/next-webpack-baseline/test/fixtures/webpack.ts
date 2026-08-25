@@ -34,37 +34,44 @@ const createVoidSyncHook = (): VoidSyncHook => {
 
 export interface WebpackModuleDefinition {
   readonly resource?: unknown;
-  readonly loaderSource: string | Uint8Array | null;
+  readonly loaderSource:
+    string | Uint8Array | null | { readonly unsupported: true };
   readonly beforeLoadersSource?: string;
   readonly entrypoints: readonly string[];
+  readonly sourceFailure?:
+    "missing-original-source" | "original-source-throws" | "source-throws";
+  readonly children?: readonly WebpackModuleDefinition[];
+  readonly nestedModulesShape?: "non-iterable" | "throws";
+  readonly groupShape?: "missing-groups" | "missing-parents";
 }
 
 export interface ObservedWebpackModule {
   readonly resource?: unknown;
   readonly type: string;
   readonly beforeLoadersSource?: string;
-  readonly originalSource: () => {
-    readonly source: () => string | Uint8Array;
+  readonly originalSource?: () => {
+    readonly source: () => unknown;
   } | null;
+  readonly modules?: unknown;
   readonly sourceReads: number;
 }
 
 interface ChunkGroup {
   readonly name?: string;
-  readonly getParents: () => Iterable<ChunkGroup>;
+  readonly getParents?: () => unknown;
 }
 
 interface Chunk {
-  readonly groupsIterable: Iterable<ChunkGroup>;
+  readonly groupsIterable?: unknown;
+}
+
+interface WebpackChunkGraphDouble {
+  readonly getModuleChunks: (module: ObservedWebpackModule) => unknown;
 }
 
 export interface WebpackCompilationDouble {
   readonly modules: Iterable<ObservedWebpackModule>;
-  readonly chunkGraph: {
-    readonly getModuleChunks: (
-      module: ObservedWebpackModule,
-    ) => Iterable<Chunk>;
-  };
+  readonly chunkGraph: WebpackChunkGraphDouble | undefined;
   readonly entrypoints: ReadonlyMap<string, ChunkGroup>;
   readonly hooks: { readonly afterSeal: VoidSyncHook };
   readonly errors: Error[];
@@ -87,9 +94,13 @@ export interface WebpackFixture {
 export const createWebpackFixture = ({
   target = "web",
   modules: definitions,
+  chunkGraphTiming = "compilation",
+  moduleChunksShape = "iterable",
 }: {
   readonly target?: "web" | "node";
   readonly modules: readonly WebpackModuleDefinition[];
+  readonly chunkGraphTiming?: "compilation" | "after-seal";
+  readonly moduleChunksShape?: "iterable" | "non-iterable";
 }): WebpackFixture => {
   const entrypoints = new Map<string, ChunkGroup>();
   for (const definition of definitions) {
@@ -101,9 +112,11 @@ export const createWebpackFixture = ({
   }
 
   const chunksByModule = new Map<ObservedWebpackModule, readonly Chunk[]>();
-  const modules = definitions.map((definition): ObservedWebpackModule => {
+  const createObservedModule = (
+    definition: WebpackModuleDefinition,
+  ): ObservedWebpackModule => {
     let sourceReads = 0;
-    const module: ObservedWebpackModule = {
+    let module: ObservedWebpackModule = {
       ...(Object.hasOwn(definition, "resource")
         ? { resource: definition.resource }
         : {}),
@@ -111,37 +124,85 @@ export const createWebpackFixture = ({
         ? {}
         : { beforeLoadersSource: definition.beforeLoadersSource }),
       type: "javascript/auto",
-      originalSource: () => {
-        sourceReads += 1;
-        if (definition.loaderSource === null) return null;
-        return { source: () => definition.loaderSource ?? "" };
-      },
+      ...(definition.sourceFailure === "missing-original-source"
+        ? {}
+        : {
+            originalSource: () => {
+              sourceReads += 1;
+              if (definition.sourceFailure === "original-source-throws") {
+                throw new Error("fixture originalSource failure");
+              }
+              if (definition.loaderSource === null) return null;
+              return {
+                source: () => {
+                  if (definition.sourceFailure === "source-throws") {
+                    throw new Error("fixture source failure");
+                  }
+                  return definition.loaderSource;
+                },
+              };
+            },
+          }),
       get sourceReads() {
         return sourceReads;
       },
     };
 
+    if (definition.children !== undefined) {
+      module = {
+        ...module,
+        modules: definition.children.map(createObservedModule),
+      };
+    } else if (definition.nestedModulesShape === "non-iterable") {
+      module = { ...module, modules: {} };
+    } else if (definition.nestedModulesShape === "throws") {
+      Object.defineProperty(module, "modules", {
+        get() {
+          throw new Error("fixture nested modules failure");
+        },
+      });
+    }
+    return module;
+  };
+
+  const modules = definitions.map((definition): ObservedWebpackModule => {
+    const module = createObservedModule(definition);
+
     const parents = definition.entrypoints.flatMap((name) => {
       const entrypoint = entrypoints.get(name);
       return entrypoint === undefined ? [] : [entrypoint];
     });
-    const moduleGroup: ChunkGroup = {
-      getParents: () => parents,
-    };
-    chunksByModule.set(module, [
-      {
-        groupsIterable:
-          definition.entrypoints.length === 0 ? [] : [moduleGroup],
-      },
-    ]);
+    const moduleGroup: ChunkGroup =
+      definition.groupShape === "missing-parents"
+        ? {}
+        : { getParents: () => parents };
+    chunksByModule.set(
+      module,
+      definition.groupShape === "missing-groups"
+        ? [{}]
+        : [
+            {
+              groupsIterable:
+                definition.entrypoints.length === 0 ? [] : [moduleGroup],
+            },
+          ],
+    );
     return module;
   });
 
   const afterSeal = createVoidSyncHook();
+  const chunkGraph: WebpackChunkGraphDouble = {
+    getModuleChunks: (module) =>
+      moduleChunksShape === "iterable"
+        ? (chunksByModule.get(module) ?? [])
+        : undefined,
+  };
+  let activeChunkGraph =
+    chunkGraphTiming === "compilation" ? chunkGraph : undefined;
   const compilation: WebpackCompilationDouble = {
     modules,
-    chunkGraph: {
-      getModuleChunks: (module) => chunksByModule.get(module) ?? [],
+    get chunkGraph() {
+      return activeChunkGraph;
     },
     entrypoints,
     hooks: { afterSeal },
@@ -159,6 +220,7 @@ export const createWebpackFixture = ({
     modules,
     run() {
       compilationHook.call(compilation);
+      activeChunkGraph = chunkGraph;
       afterSeal.call();
       return compilation.errors;
     },

@@ -29,7 +29,7 @@ const baselineFor = (
 
 const pageModule = (
   entrypoint: string,
-  loaderSource: string,
+  loaderSource: WebpackModuleDefinition["loaderSource"],
 ): WebpackModuleDefinition => ({
   resource: `${packageRoot}/${entrypoint}`,
   loaderSource,
@@ -59,6 +59,25 @@ const errorRecords = (errors: readonly Error[]) =>
   }));
 
 describe("createWebpackPlugin", () => {
+  it("chunkGraph가 afterSeal 직전에 준비되는 Webpack lifecycle을 지원한다", () => {
+    const fixture = createWebpackFixture({
+      chunkGraphTiming: "after-seal",
+      modules: [pageModule("dist/lifecycle.js", "const value = input?.value;")],
+    });
+    createWebpackPlugin(
+      { config, baseline: baselineFor() },
+      { dev: false },
+    ).apply(fixture.compiler);
+
+    expect(errorRecords(fixture.run())).toEqual([
+      {
+        code: "NWB_SYNTAX_UNSUPPORTED",
+        message:
+          "[NWB_SYNTAX_UNSUPPORTED] legacy-widget/dist/lifecycle.js: optional-chaining 구문은 설정된 browser baseline에서 지원되지 않습니다.",
+      },
+    ]);
+  });
+
   it("server compilation은 module source를 읽지 않고 검사에서 제외한다", () => {
     const { fixture, errors } = runPlugin({
       target: "node",
@@ -88,6 +107,40 @@ describe("createWebpackPlugin", () => {
 
     expect(errors).toEqual([]);
     expect(fixture.modules.map((module) => module.sourceReads)).toEqual([0, 0]);
+  });
+
+  it("도달한 정책 package의 loader source를 읽을 수 없으면 안정된 오류로 차단한다", () => {
+    const { errors } = runPlugin({
+      definitions: [
+        {
+          ...pageModule("dist/a-missing.js", "const value = 1;"),
+          sourceFailure: "missing-original-source",
+        },
+        pageModule("dist/b-null.js", null),
+        {
+          ...pageModule("dist/c-original-throws.js", "const value = 1;"),
+          sourceFailure: "original-source-throws",
+        },
+        {
+          ...pageModule("dist/d-source-throws.js", "const value = 1;"),
+          sourceFailure: "source-throws",
+        },
+        pageModule("dist/e-unsupported.js", { unsupported: true }),
+      ],
+    });
+
+    expect(errorRecords(errors)).toEqual(
+      [
+        "dist/a-missing.js",
+        "dist/b-null.js",
+        "dist/c-original-throws.js",
+        "dist/d-source-throws.js",
+        "dist/e-unsupported.js",
+      ].map((entrypoint) => ({
+        code: "NWB_WEBPACK_UNSUPPORTED",
+        message: `[NWB_WEBPACK_UNSUPPORTED] legacy-widget/${entrypoint}: loader 처리 후 JavaScript source를 읽을 수 없습니다.`,
+      })),
+    );
   });
 
   it("loader 처리 전 source가 아니라 originalSource의 처리 결과를 검사한다", () => {
@@ -144,6 +197,86 @@ describe("createWebpackPlugin", () => {
       1, 0, 0,
     ]);
   });
+
+  it.each([
+    { name: "module chunk iterable 부재", moduleChunksShape: "non-iterable" },
+    { name: "chunk group iterable 부재", groupShape: "missing-groups" },
+    { name: "chunk group parent API 부재", groupShape: "missing-parents" },
+  ] satisfies ReadonlyArray<{
+    name: string;
+    moduleChunksShape?: "non-iterable";
+    groupShape?: "missing-groups" | "missing-parents";
+  }>)("$name은 NWB_WEBPACK_UNSUPPORTED로 fail-closed 한다", (shape) => {
+    const fixture = createWebpackFixture({
+      modules: [
+        {
+          ...pageModule("dist/graph.js", "const value = input?.value;"),
+          ...(shape.groupShape === undefined
+            ? {}
+            : { groupShape: shape.groupShape }),
+        },
+      ],
+      ...(shape.moduleChunksShape === undefined
+        ? {}
+        : { moduleChunksShape: shape.moduleChunksShape }),
+    });
+    createWebpackPlugin(
+      { config, baseline: baselineFor() },
+      { dev: false },
+    ).apply(fixture.compiler);
+
+    expect(() => fixture.run()).toThrow(
+      expect.objectContaining({ code: "NWB_WEBPACK_UNSUPPORTED" }),
+    );
+  });
+
+  it("iterable inner modules를 가진 합성 module은 각 loader source를 검사한다", () => {
+    const { errors } = runPlugin({
+      definitions: [
+        {
+          loaderSource: null,
+          entrypoints: ["pages/index"],
+          children: [
+            pageModule(
+              "dist/concatenated-child.js",
+              "const value = input?.value;",
+            ),
+          ],
+        },
+      ],
+    });
+
+    expect(errorRecords(errors)).toEqual([
+      {
+        code: "NWB_SYNTAX_UNSUPPORTED",
+        message:
+          "[NWB_SYNTAX_UNSUPPORTED] legacy-widget/dist/concatenated-child.js: optional-chaining 구문은 설정된 browser baseline에서 지원되지 않습니다.",
+      },
+    ]);
+  });
+
+  it.each(["non-iterable", "throws"] as const)(
+    "inner module container가 %s이면 조용히 제외하지 않는다",
+    (nestedModulesShape) => {
+      const fixture = createWebpackFixture({
+        modules: [
+          {
+            loaderSource: null,
+            entrypoints: ["pages/index"],
+            nestedModulesShape,
+          },
+        ],
+      });
+      createWebpackPlugin(
+        { config, baseline: baselineFor() },
+        { dev: false },
+      ).apply(fixture.compiler);
+
+      expect(() => fixture.run()).toThrow(
+        expect.objectContaining({ code: "NWB_WEBPACK_UNSUPPORTED" }),
+      );
+    },
+  );
 
   it("동일 resource와 content hash는 한 번만 분석하고 다른 content는 분리한다", () => {
     class CountingSyntaxSet extends Set<SyntaxFeature> {
