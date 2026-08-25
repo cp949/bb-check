@@ -23,6 +23,25 @@ const readManifest = async () =>
   };
 
 describe("@cp949/next-webpack-baseline 공개 package 계약", () => {
+  it("Node 20.0 ESM 환경에서도 public config의 projectDir를 만들 수 있다", () => {
+    const dirname = Object.getOwnPropertyDescriptor(import.meta, "dirname");
+    Reflect.deleteProperty(import.meta, "dirname");
+    try {
+      const config = defineConfig({
+        projectDir: fileURLToPath(new URL(".", import.meta.url)),
+        policy: [],
+      });
+
+      expect(config.projectDir).toBe(
+        fileURLToPath(new URL(".", import.meta.url)),
+      );
+    } finally {
+      if (dirname !== undefined) {
+        Object.defineProperty(import.meta, "dirname", dirname);
+      }
+    }
+  });
+
   it("공개 config type은 빈 policy의 중립 사용 예를 허용한다", () => {
     const config = defineConfig({ projectDir: packageDir, policy: [] });
 

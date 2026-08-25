@@ -7,9 +7,10 @@ import {
   createNextWebpackBaseline,
   defineConfig,
 } from "@cp949/next-webpack-baseline";
+import { fileURLToPath } from "node:url";
 
 const config = defineConfig({
-  projectDir: import.meta.dirname,
+  projectDir: fileURLToPath(new URL(".", import.meta.url)),
   policy: [],
 });
 const baseline = createNextWebpackBaseline(config);
