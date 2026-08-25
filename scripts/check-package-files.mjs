@@ -1,165 +1,449 @@
 #!/usr/bin/env node
-// @cp949/bb-check가 실제로 publish할 tarball 내용물을 검사한다.
-//
-// 검사 세 가지:
-// 1. `npm pack --dry-run --json`이 보고하는 파일 목록이 allowlist(dist/**,
-//    README.md, LICENSE, package.json)를 벗어나지 않는가.
-// 2. README.md/LICENSE/package.json과 dist/의 entry 산출물(index/library/cli의
-//    .js와 .d.ts)이 실제로 그 목록에 있는가 — `files` allowlist는 "이 이름이
-//    나오면 허용"일 뿐 "반드시 나와야 한다"는 보장이 아니다(예: 두 파일이
-//    package 디렉터리에서 사라지면 `npm pack`은 조용히 그냥 빠뜨린다).
-//    README.md는 package가 직접 소유하고, LICENSE는
-//    `prepack`(scripts/copy-root-license.mjs)이 저장소 루트에서 복사한다.
-//    LICENSE 최신화 step이 조용히 실패하거나 생략되는 회귀를 여기서 잡는다.
-//    dist/*.js와 dist/*.d.ts는 build가 아예 안 됐거나
-//    (dist/가 없거나) 오래된 상태로 남아 있는 회귀(예: C1 — test가 build보다
-//    먼저 돌아 실제로는 한 번도 검증되지 않은 dist/를 그대로 pack하는 사고)를
-//    여기서 잡는다 — `files`의 "dist/**"는 존재 여부를 전혀 강제하지
-//    않으므로 이 REQUIRED_EXACT 목록이 유일한 강제 지점이다. hash가 붙는
-//    공유 chunk 파일(예: dist/src-XXXXXXXX.js, dist/types-XXXXXXXX.d.ts)은
-//    빌드마다 파일명이 달라 exact-name으로 강제할 수 없으므로 여기 포함하지
-//    않는다 — entry 3개(index/library/cli)의 안정적인 파일명만 강제한다.
-// 3. package.json의 `dependencies`에 private workspace package(@cp949/bb-core,
-//    @cp949/bb-library, @cp949/bb-nextjs)나 `workspace:` protocol 지정이
-//    남아있지 않은가 — 남아있으면 이 패키지만 설치한 소비자가 resolve하지
-//    못하는 dependency가 생긴다.
-//
-// `npm pack --dry-run --json`은 파일 목록만 보고하고 package.json의
-// dependencies 내용은 포함하지 않으므로(직접 확인함), dependency 검사는
-// package.json을 별도로 읽어 수행한다.
+// 공개 workspace package를 각각 독립된 tarball 단위로 검사한다.
+// manifest files/exports, declaration, sourcemap과 공개 불가능한 runtime
+// dependency를 package 사이에 공유하지 않고 검증한다.
 
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { readdir, readFile } from "node:fs/promises";
+import { dirname, join, posix, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-// `new URL(...)` global 대신 fileURLToPath + dirname을 쓴다 — 저장소
-// eslint globals 설정(process/console만 허용)과 충돌하지 않는다.
-const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const packageDir = join(repoRoot, "packages", "bb-check");
+const defaultRepoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const useShell = process.platform === "win32";
 
-const ALLOWED_EXACT = new Set(["README.md", "LICENSE", "package.json"]);
-const ALLOWED_DIR_PREFIX = "dist/";
-const REQUIRED_EXACT = [
-  "README.md",
-  "LICENSE",
-  "package.json",
-  // vite.config.ts의 lib.entry(index/library/cli) 3개가 각각 만드는
-  // 안정적인 파일명. hash가 붙는 공유 chunk는 여기 포함하지 않는다(위
-  // 파일 상단 주석 참고).
-  "dist/index.js",
-  "dist/index.d.ts",
-  "dist/library.js",
-  "dist/library.d.ts",
-  "dist/cli.js",
-  "dist/cli.d.ts",
-];
+const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
 
-const FORBIDDEN_DEPENDENCY_NAMES = [
-  "@cp949/bb-core",
-  "@cp949/bb-library",
-  "@cp949/bb-nextjs",
-];
-
-/** path가 allowlist(dist/**, README.md, LICENSE, package.json) 안에 있는지 확인한다. */
-const isAllowedPath = (path) =>
-  ALLOWED_EXACT.has(path) || path.startsWith(ALLOWED_DIR_PREFIX);
-
-/** dependencies 필드에 workspace protocol 지정이나 private workspace package가 남아있는지 확인한다. */
-const findForbiddenDependencies = (dependencies) => {
-  const problems = [];
-  if (dependencies === undefined) return problems;
-  for (const [name, spec] of Object.entries(dependencies)) {
-    if (FORBIDDEN_DEPENDENCY_NAMES.includes(name)) {
-      problems.push(
-        `dependencies["${name}"] = "${spec}" (private workspace package)`,
-      );
-    }
-    if (typeof spec === "string" && spec.includes("workspace:")) {
-      problems.push(
-        `dependencies["${name}"] = "${spec}" (workspace: protocol)`,
-      );
-    }
+const workspacePatternsOf = (manifest) => {
+  const { workspaces } = manifest;
+  if (Array.isArray(workspaces)) return workspaces;
+  if (
+    typeof workspaces === "object" &&
+    workspaces !== null &&
+    Array.isArray(workspaces.packages)
+  ) {
+    return workspaces.packages;
   }
-  return problems;
+  throw new Error("root package.json의 workspaces 배열을 읽을 수 없습니다.");
 };
 
-/** `npm pack --dry-run --json`을 packageDir에서 실행해 파일 목록을 얻는다. */
-const readPackFiles = () => {
+const workspacePathsForPattern = async (repoRoot, pattern) => {
+  if (typeof pattern !== "string" || pattern === "") {
+    throw new Error("workspace pattern은 비어 있지 않은 문자열이어야 합니다.");
+  }
+  const normalized = pattern.replaceAll("\\", "/").replace(/^\.\//u, "");
+  if (!normalized.includes("*")) return [normalized];
+  if (!normalized.endsWith("/*") || normalized.slice(0, -2).includes("*")) {
+    throw new Error(`지원하지 않는 workspace pattern입니다: ${pattern}`);
+  }
+
+  const parentPath = normalized.slice(0, -2);
+  const entries = await readdir(join(repoRoot, parentPath), {
+    withFileTypes: true,
+  }).catch((cause) => {
+    if (cause?.code === "ENOENT") return [];
+    throw cause;
+  });
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => `${parentPath}/${entry.name}`);
+};
+
+const discoverWorkspacePackages = async (repoRoot) => {
+  const rootManifest = await readJson(join(repoRoot, "package.json"));
+  const workspacePaths = new Set();
+  for (const pattern of workspacePatternsOf(rootManifest)) {
+    for (const workspacePath of await workspacePathsForPattern(
+      repoRoot,
+      pattern,
+    )) {
+      workspacePaths.add(workspacePath);
+    }
+  }
+
+  const packages = [];
+  for (const workspacePath of [...workspacePaths].sort()) {
+    const packageDir = join(repoRoot, workspacePath);
+    let manifest;
+    try {
+      manifest = await readJson(join(packageDir, "package.json"));
+    } catch (cause) {
+      if (cause?.code === "ENOENT") continue;
+      throw new Error(`${workspacePath}/package.json을 읽을 수 없습니다.`, {
+        cause,
+      });
+    }
+    packages.push({ workspacePath, packageDir, manifest });
+  }
+  return packages;
+};
+
+/** root workspaces 전체에서 private이 아닌 package를 path 순서로 반환한다. */
+export const discoverPublicWorkspacePackages = async (repoRoot) =>
+  (await discoverWorkspacePackages(repoRoot)).filter(
+    ({ manifest }) => manifest.private !== true,
+  );
+
+const readNpmPackFiles = ({ packageDir, workspacePath }) => {
   const result = spawnSync("npm", ["pack", "--dry-run", "--json"], {
     cwd: packageDir,
     encoding: "utf8",
-    // Windows(cmd.exe)에서는 npm.cmd를 shell 경유로 찾아야 한다. args는
-    // 고정 literal이라 shell injection 위험이 없다.
-    shell: process.platform === "win32",
+    shell: useShell,
   });
   if (result.error) {
-    throw new Error(`npm pack 실행 실패: ${result.error.message}`);
+    throw new Error(
+      `npm pack 실행 실패(${workspacePath}): ${result.error.message}`,
+    );
   }
   if (result.status !== 0) {
     throw new Error(
-      `npm pack --dry-run --json이 exit ${result.status}로 종료했다.\nstderr:\n${result.stderr}`,
+      `npm pack --dry-run --json이 exit ${result.status}로 종료했습니다(${workspacePath}).\nstderr:\n${result.stderr}`,
     );
   }
-  let manifest;
+  let output;
   try {
-    manifest = JSON.parse(result.stdout);
+    output = JSON.parse(result.stdout);
   } catch (cause) {
     throw new Error(
-      `npm pack --dry-run --json 출력을 JSON으로 파싱하지 못했다.\nstdout:\n${result.stdout}`,
+      `npm pack --dry-run --json 출력을 JSON으로 파싱하지 못했습니다(${workspacePath}).`,
       { cause },
     );
   }
-  const [entry] = manifest;
+  const [entry] = output;
   if (!entry || !Array.isArray(entry.files)) {
     throw new Error(
-      `npm pack --dry-run --json 출력 형식이 예상과 다르다: ${result.stdout}`,
+      `npm pack --dry-run --json 출력 형식이 예상과 다릅니다(${workspacePath}).`,
     );
   }
   return entry.files.map((file) => file.path);
 };
 
-const main = async () => {
+const normalizeArtifactPath = (value) =>
+  value.startsWith("./") ? value.slice(2) : value;
+
+const isCoveredByFiles = (path, patterns) =>
+  patterns.some((pattern) => {
+    const normalized = normalizeArtifactPath(pattern);
+    if (normalized.endsWith("/**")) {
+      return path.startsWith(normalized.slice(0, -2));
+    }
+    if (normalized.endsWith("/*")) {
+      const prefix = normalized.slice(0, -1);
+      return (
+        path.startsWith(prefix) && !path.slice(prefix.length).includes("/")
+      );
+    }
+    return path === normalized;
+  });
+
+const collectTargets = (value, targets) => {
+  if (typeof value === "string") {
+    targets.push(value);
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectTargets(item, targets);
+  } else if (typeof value === "object" && value !== null) {
+    for (const item of Object.values(value)) collectTargets(item, targets);
+  }
+};
+
+const exportEntries = (exportsField) => {
+  if (typeof exportsField === "string" || Array.isArray(exportsField)) {
+    return [[".", exportsField]];
+  }
+  if (typeof exportsField !== "object" || exportsField === null) return [];
+  const entries = Object.entries(exportsField);
+  if (entries.some(([key]) => key.startsWith("."))) return entries;
+  return [[".", exportsField]];
+};
+
+const declarationFor = (runtimePath) =>
+  runtimePath.replace(/\.(?:mjs|cjs|js)$/u, ".d.ts");
+
+const targetsMatching = (value, pattern) => {
+  const targets = [];
+  collectTargets(value, targets);
+  return targets
+    .map(normalizeArtifactPath)
+    .filter((path) => pattern.test(path));
+};
+
+const binTargetsOf = (bin) => {
+  if (typeof bin === "string") return [normalizeArtifactPath(bin)];
+  if (typeof bin !== "object" || bin === null) return [];
+  return Object.values(bin)
+    .filter((value) => typeof value === "string")
+    .map(normalizeArtifactPath);
+};
+
+const sourceMapReferences = (source) => {
+  const references = [];
+  const pattern = /\/\/[#@]\s*sourceMappingURL=([^\s]+)/gu;
+  for (const match of source.matchAll(pattern)) {
+    if (match[1] !== undefined) references.push(match[1]);
+  }
+  return references;
+};
+
+const formatProblem = (workspace, category, message) =>
+  `${workspace} [${category}] ${message}`;
+
+const validatePackage = async ({
+  workspacePath,
+  packageDir,
+  manifest,
+  packedPaths,
+  privateWorkspaceNames,
+}) => {
   const problems = [];
-
-  const packedPaths = readPackFiles();
-  const disallowedPaths = packedPaths.filter((path) => !isAllowedPath(path));
-  if (disallowedPaths.length > 0) {
+  const packed = new Set(packedPaths);
+  const files = Array.isArray(manifest.files)
+    ? manifest.files.filter(
+        (entry) => typeof entry === "string" && entry !== "",
+      )
+    : [];
+  if (
+    !Array.isArray(manifest.files) ||
+    files.length !== manifest.files.length
+  ) {
     problems.push(
-      `허용되지 않은 파일이 tarball에 포함되어 있다:\n${disallowedPaths.map((p) => `  - ${p}`).join("\n")}`,
+      formatProblem(
+        workspacePath,
+        "files",
+        "manifest files는 비어 있지 않은 문자열 배열이어야 합니다.",
+      ),
     );
+  } else {
+    for (const path of packedPaths) {
+      if (!isCoveredByFiles(path, files)) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "files",
+            `tarball 파일이 manifest files 범위 밖입니다: ${path}`,
+          ),
+        );
+      }
+    }
+    for (const pattern of files) {
+      if (!packedPaths.some((path) => isCoveredByFiles(path, [pattern]))) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "files",
+            `manifest files 항목에 대응하는 tarball 파일이 없습니다: ${pattern}`,
+          ),
+        );
+      }
+    }
   }
 
-  const missingRequired = REQUIRED_EXACT.filter(
-    (path) => !packedPaths.includes(path),
-  );
-  if (missingRequired.length > 0) {
+  const exports = exportEntries(manifest.exports);
+  if (exports.length === 0) {
     problems.push(
-      `필수 파일이 tarball에 없다:\n${missingRequired.map((p) => `  - ${p}`).join("\n")}`,
+      formatProblem(workspacePath, "exports", "manifest exports가 없습니다."),
     );
   }
+  for (const [subpath, value] of exports) {
+    const targets = [];
+    collectTargets(value, targets);
+    for (const target of targets) {
+      if (!target.startsWith("./")) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "exports",
+            `${subpath} target은 package 상대 경로여야 합니다: ${target}`,
+          ),
+        );
+      } else if (!packed.has(normalizeArtifactPath(target))) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "exports",
+            `${subpath} target이 tarball에 없습니다: ${target}`,
+          ),
+        );
+      }
+    }
 
-  const manifestSource = JSON.parse(
-    await readFile(join(packageDir, "package.json"), "utf8"),
-  );
-  const dependencyProblems = findForbiddenDependencies(
-    manifestSource.dependencies,
-  );
-  if (dependencyProblems.length > 0) {
-    problems.push(
-      `dependencies에 publish 불가능한 항목이 남아있다:\n${dependencyProblems.map((p) => `  - ${p}`).join("\n")}`,
-    );
+    const runtimes = targetsMatching(value, /\.(?:mjs|cjs|js)$/u);
+    const declarations = targetsMatching(value, /\.d\.(?:mts|cts|ts)$/u);
+    for (const runtimePath of runtimes) {
+      const candidates = [...declarations, declarationFor(runtimePath)];
+      if (!candidates.some((path) => packed.has(path))) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "declaration",
+            `${subpath} runtime target의 declaration이 없습니다: ${runtimePath}`,
+          ),
+        );
+      }
+    }
   }
 
-  if (problems.length > 0) {
+  for (const binPath of binTargetsOf(manifest.bin)) {
+    if (!packed.has(binPath)) {
+      problems.push(
+        formatProblem(
+          workspacePath,
+          "exports",
+          `bin target이 tarball에 없습니다: ${binPath}`,
+        ),
+      );
+    }
+    if (!packed.has(declarationFor(binPath))) {
+      problems.push(
+        formatProblem(
+          workspacePath,
+          "declaration",
+          `bin target의 declaration이 없습니다: ${binPath}`,
+        ),
+      );
+    }
+  }
+
+  const sourceCandidates = packedPaths.filter((path) =>
+    /(?:\.d\.ts|\.(?:mjs|cjs|js))$/u.test(path),
+  );
+  for (const sourcePath of sourceCandidates) {
+    let source;
+    try {
+      source = await readFile(join(packageDir, sourcePath), "utf8");
+    } catch {
+      problems.push(
+        formatProblem(
+          workspacePath,
+          "sourcemap",
+          `tarball source를 읽을 수 없습니다: ${sourcePath}`,
+        ),
+      );
+      continue;
+    }
+    for (const reference of sourceMapReferences(source)) {
+      if (reference.startsWith("data:")) continue;
+      if (/^[a-z][a-z+.-]*:/iu.test(reference)) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "sourcemap",
+            `외부 sourcemap URL은 검증할 수 없습니다: ${sourcePath}`,
+          ),
+        );
+        continue;
+      }
+      const mapPath = posix.normalize(
+        posix.join(posix.dirname(sourcePath), reference),
+      );
+      if (
+        mapPath === ".." ||
+        mapPath.startsWith("../") ||
+        !packed.has(mapPath)
+      ) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "sourcemap",
+            `참조한 sourcemap이 tarball에 없습니다: ${sourcePath} -> ${reference}`,
+          ),
+        );
+      }
+    }
+  }
+  for (const mapPath of packedPaths.filter((path) => path.endsWith(".map"))) {
+    try {
+      JSON.parse(await readFile(join(packageDir, mapPath), "utf8"));
+    } catch {
+      problems.push(
+        formatProblem(
+          workspacePath,
+          "sourcemap",
+          `sourcemap JSON을 읽을 수 없습니다: ${mapPath}`,
+        ),
+      );
+    }
+  }
+
+  const dependencies = manifest.dependencies;
+  if (typeof dependencies === "object" && dependencies !== null) {
+    for (const [name, spec] of Object.entries(dependencies)) {
+      if (privateWorkspaceNames.has(name)) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "dependencies",
+            `private workspace dependency가 남아 있습니다: ${name}`,
+          ),
+        );
+      }
+      if (typeof spec === "string" && spec.includes("workspace:")) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "dependencies",
+            `workspace: protocol dependency가 남아 있습니다: ${name}`,
+          ),
+        );
+      }
+    }
+  }
+
+  return problems;
+};
+
+/** 공개 package를 stable workspace-path 순서로 pack하고 각각 검증한다. */
+export const checkPublicWorkspacePackages = async ({
+  repoRoot = defaultRepoRoot,
+  readPackFiles = readNpmPackFiles,
+} = {}) => {
+  const workspaces = await discoverWorkspacePackages(repoRoot);
+  const publicPackages = workspaces.filter(
+    ({ manifest }) => manifest.private !== true,
+  );
+  const privateWorkspaceNames = new Set(
+    workspaces
+      .filter(({ manifest }) => manifest.private === true)
+      .map(({ manifest }) => manifest.name)
+      .filter((name) => typeof name === "string"),
+  );
+  const problems = [];
+  let packedFileCount = 0;
+  for (const packageInfo of publicPackages) {
+    const packedPaths = await readPackFiles(packageInfo);
+    if (!Array.isArray(packedPaths)) {
+      throw new Error(
+        `${packageInfo.workspacePath}의 npm pack 파일 목록이 배열이 아닙니다.`,
+      );
+    }
+    packedFileCount += packedPaths.length;
+    problems.push(
+      ...(await validatePackage({
+        ...packageInfo,
+        packedPaths,
+        privateWorkspaceNames,
+      })),
+    );
+  }
+  return {
+    workspacePaths: publicPackages.map(({ workspacePath }) => workspacePath),
+    packedFileCount,
+    problems,
+  };
+};
+
+const main = async () => {
+  const result = await checkPublicWorkspacePackages();
+  if (result.problems.length > 0) {
     console.error("check-package-files: FAIL\n");
-    console.error(problems.join("\n\n"));
-    process.exit(1);
+    console.error(result.problems.join("\n"));
+    process.exitCode = 1;
+    return;
   }
-
   console.log(
-    `check-package-files: OK (${packedPaths.length}개 파일, allowlist 통과, dependencies 정상)`,
+    `check-package-files: OK (${result.workspacePaths.length}개 공개 package, ${result.packedFileCount}개 파일)`,
   );
 };
 
-await main();
+const isMainModule =
+  process.argv[1] !== undefined &&
+  pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
+if (isMainModule) await main();

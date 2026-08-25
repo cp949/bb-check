@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// @cp949/bb-check가 "이 패키지만 설치한 새 프로젝트"에서 실제로 동작하는지
-// 검증한다. workspace symlink나 vitest의 Vite 기반 resolver를 거치지
-// 않는, 진짜 격리된 소비자를 흉내낸다:
+// 선택한 공개 package가 "이 패키지만 설치한 새 프로젝트"에서 실제로
+// 동작하는지 검증한다. workspace symlink나 Vite resolver를 거치지 않는,
+// 진짜 격리된 소비자를 흉내낸다. 인자가 없으면 기존 bb-check를 선택한다.
 //
 //   1. `npm pack`으로 실제 tgz를 만든다.
 //   2. mkdtemp로 만든 빈 프로젝트에 그 tgz와 esbuild를 dev dependency로
@@ -31,8 +31,26 @@ import { spawnSync } from "node:child_process";
 // `new URL(...)` global 대신 fileURLToPath + dirname을 쓴다 — 저장소
 // eslint globals 설정(process/console만 허용)과 충돌하지 않는다.
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const packageDir = join(repoRoot, "packages", "bb-check");
 const useShell = process.platform === "win32";
+
+const PACKAGE_DIR_NAMES = new Map([
+  ["@cp949/bb-check", "bb-check"],
+  ["@cp949/next-webpack-baseline", "next-webpack-baseline"],
+]);
+
+/** `--package <name>`을 해석한다. 인자가 없으면 기존 package를 유지한다. */
+export const parsePackageSelection = (args) => {
+  if (args.length === 0) return "@cp949/bb-check";
+  if (args.length !== 2 || args[0] !== "--package" || args[1] === undefined) {
+    throw new Error(
+      "사용법: npm run test-packed-package -- --package <npm-package-name>",
+    );
+  }
+  if (!PACKAGE_DIR_NAMES.has(args[1])) {
+    throw new Error(`지원하지 않는 공개 package입니다: ${args[1]}`);
+  }
+  return args[1];
+};
 
 /** 상위 npm publish --dry-run 설정을 내부 pack/install에 전파하지 않는다. */
 export const forceActualNpmOperationEnv = (env) => ({
@@ -86,8 +104,49 @@ const writeSourceFixture = async (dir, browserslist, source) => {
   await writeFile(join(dir, "src", "index.js"), source, "utf8");
 };
 
-const main = async () => {
-  const tmpRoot = await mkdtemp(join(tmpdir(), "bb-check-packed-consumer-"));
+const verifyInstalledDocs = async (consumerDir, packageName) => {
+  const installedPackageDir = join(
+    consumerDir,
+    "node_modules",
+    ...packageName.split("/"),
+  );
+  for (const name of ["README.md", "LICENSE"]) {
+    await stat(join(installedPackageDir, name)).catch(() => {
+      throw new Error(`설치된 ${packageName} package에 ${name}이 없다.`);
+    });
+  }
+};
+
+const verifyNextWebpackBaseline = (consumerDir) => {
+  const source = [
+    'import { createNextWebpackBaseline, defineConfig } from "@cp949/next-webpack-baseline";',
+    "const config = defineConfig({",
+    "  projectDir: process.cwd(),",
+    '  policy: [{ package: "example-package", reason: "legacy syntax check" }],',
+    "});",
+    "const facade = createNextWebpackBaseline(config);",
+    'if (JSON.stringify(Object.keys(facade)) !== JSON.stringify(["transpilePackages", "webpackPlugin"])) throw new Error("facade keys mismatch");',
+    'if (JSON.stringify(facade.transpilePackages) !== JSON.stringify(["example-package"])) throw new Error("transpilePackages mismatch");',
+    'if (typeof facade.webpackPlugin({ dev: false }).apply !== "function") throw new Error("webpack plugin mismatch");',
+  ].join("\n");
+  const result = run(
+    "node -e next-webpack-baseline facade",
+    "node",
+    ["--input-type=module", "-e", source],
+    { cwd: consumerDir },
+  );
+  expectExitCode("node -e next-webpack-baseline facade", result, 0);
+  expectNoUnresolvedModule("node -e next-webpack-baseline facade", result);
+};
+
+const main = async (args = process.argv.slice(2)) => {
+  const packageName = parsePackageSelection(args);
+  const packageDirName = PACKAGE_DIR_NAMES.get(packageName);
+  if (packageDirName === undefined) {
+    throw new Error(`package directory를 찾을 수 없습니다: ${packageName}`);
+  }
+  const packageDir = join(repoRoot, "packages", packageDirName);
+  const tmpRoot = await mkdtemp(join(tmpdir(), "packed-package-consumer-"));
   try {
     const packDestDir = join(tmpRoot, "pack");
     const consumerDir = join(tmpRoot, "consumer");
@@ -109,32 +168,42 @@ const main = async () => {
     //    만들고 tgz와 esbuild를 dev dependency로 실제 설치한다. esbuild는
     //    package가 검증한 고정 버전을 직접 설치해 registry latest 변동을
     //    release gate에 섞지 않는다. workspace symlink는 전혀 거치지 않는다.
+    const consumerManifest =
+      packageName === "@cp949/bb-check"
+        ? {
+            name: "bb-check-isolated-consumer",
+            version: "0.0.0",
+            private: true,
+            type: "module",
+            exports: "./dist/index.js",
+            scripts: {
+              build:
+                "esbuild src/index.js --bundle --format=esm --target=chrome80 --outfile=dist/index.js",
+            },
+            browserslist: ["Chrome >= 80"],
+          }
+        : {
+            name: "next-webpack-baseline-isolated-consumer",
+            version: "0.0.0",
+            private: true,
+            type: "module",
+            browserslist: { production: ["chrome 75"] },
+          };
     await writeFile(
       join(consumerDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "bb-check-isolated-consumer",
-          version: "0.0.0",
-          private: true,
-          type: "module",
-          exports: "./dist/index.js",
-          scripts: {
-            build:
-              "esbuild src/index.js --bundle --format=esm --target=chrome80 --outfile=dist/index.js",
-          },
-          browserslist: ["Chrome >= 80"],
-        },
-        null,
-        2,
-      ),
+      JSON.stringify(consumerManifest, null, 2),
       "utf8",
     );
     const packageManifest = JSON.parse(
       await readFile(join(packageDir, "package.json"), "utf8"),
     );
-    const esbuildVersion = packageManifest.dependencies?.esbuild;
-    if (typeof esbuildVersion !== "string" || esbuildVersion.length === 0) {
-      throw new Error("@cp949/bb-check package.json에 esbuild 버전이 없다.");
+    const extraInstallSpecs = [];
+    if (packageName === "@cp949/bb-check") {
+      const esbuildVersion = packageManifest.dependencies?.esbuild;
+      if (typeof esbuildVersion !== "string" || esbuildVersion.length === 0) {
+        throw new Error("@cp949/bb-check package.json에 esbuild 버전이 없다.");
+      }
+      extraInstallSpecs.push(`esbuild@${esbuildVersion}`);
     }
     const installResult = run(
       "npm install",
@@ -143,7 +212,7 @@ const main = async () => {
         "install",
         "--save-dev",
         tgzPath,
-        `esbuild@${esbuildVersion}`,
+        ...extraInstallSpecs,
         "--no-audit",
         "--no-fund",
         "--loglevel=error",
@@ -151,6 +220,15 @@ const main = async () => {
       { cwd: consumerDir, env: forceActualNpmOperationEnv(process.env) },
     );
     expectExitCode("npm install", installResult, 0);
+
+    await verifyInstalledDocs(consumerDir, packageName);
+    if (packageName === "@cp949/next-webpack-baseline") {
+      verifyNextWebpackBaseline(consumerDir);
+      console.log(
+        "test-packed-package: OK (@cp949/next-webpack-baseline, 격리 설치, root facade import 확인)",
+      );
+      return;
+    }
 
     // 3. 공개 entry 두 개가 로드되는지 확인한다.
     const importIndex = run(
@@ -201,18 +279,6 @@ const main = async () => {
     // 소유하고 LICENSE는 `prepack`이 저장소 루트에서 복사한다 —
     // check-package-files.mjs가 tarball manifest 수준에서 이미 검사하지만,
     // 여기서는 실제 설치 결과로도 다시 확인한다).
-    const installedPackageDir = join(
-      consumerDir,
-      "node_modules",
-      "@cp949",
-      "bb-check",
-    );
-    for (const name of ["README.md", "LICENSE"]) {
-      await stat(join(installedPackageDir, name)).catch(() => {
-        throw new Error(`설치된 package에 ${name}이 없다.`);
-      });
-    }
-
     // --help가 미해결 dependency 없이 standalone으로 로드·실행되고, 셸
     // 관례대로 exit 0으로 끝나는지 확인한다(usage ERROR가 아니라 usage
     // REQUEST이므로 0이 맞다 — CLI 자체가 --help/-h를 명시적으로 처리한다).
@@ -334,14 +400,17 @@ const main = async () => {
     }
 
     console.log(
-      "test-packed-package: OK (격리 설치, entry import 2건, bin 실행, source build 2건, pass/fail exit code 모두 확인)",
+      "test-packed-package: OK (@cp949/bb-check, 격리 설치, entry import 2건, bin 실행, source build 2건, pass/fail exit code 모두 확인)",
     );
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
   }
 };
 
-if (resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
   main().catch((cause) => {
     console.error("test-packed-package: FAIL\n");
     console.error(

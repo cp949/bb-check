@@ -12,5 +12,13 @@ export default defineConfig({
       formats: ["es"],
       fileName: "index",
     },
+    rollupOptions: {
+      external: [
+        /^node:/u,
+        /^@babel\/compat-data(?:\/|$)/u,
+        "@babel/parser",
+        "browserslist",
+      ],
+    },
   },
 });

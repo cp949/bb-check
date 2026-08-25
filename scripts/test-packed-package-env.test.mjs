@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import { forceActualNpmOperationEnv } from "./test-packed-package.mjs";
+import {
+  forceActualNpmOperationEnv,
+  parsePackageSelection,
+} from "./test-packed-package.mjs";
 
 test("상위 npm publish dry-run에서도 내부 pack과 install은 실제 파일을 만든다", () => {
   const original = {
@@ -18,10 +21,27 @@ test("상위 npm publish dry-run에서도 내부 pack과 install은 실제 파�
   assert.equal(original.npm_config_dry_run, "true");
 });
 
-test("상위 dry-run 환경에서도 격리 tarball 설치와 CLI 검증을 완료한다", () => {
+test("--package가 없으면 기존 bb-check를 선택하고 package 이름만 허용한다", () => {
+  assert.equal(parsePackageSelection([]), "@cp949/bb-check");
+  assert.equal(
+    parsePackageSelection(["--package", "@cp949/next-webpack-baseline"]),
+    "@cp949/next-webpack-baseline",
+  );
+  assert.throws(
+    () => parsePackageSelection(["--package", "@fixture/unknown"]),
+    /지원하지 않는 공개 package/u,
+  );
+  assert.throws(() => parsePackageSelection(["--package"]), /사용법/u);
+});
+
+test("상위 dry-run 환경에서도 bb-check 격리 tarball과 CLI를 검증한다", () => {
   const result = spawnSync(
     process.execPath,
-    [resolve(import.meta.dirname, "test-packed-package.mjs")],
+    [
+      resolve(import.meta.dirname, "test-packed-package.mjs"),
+      "--package",
+      "@cp949/bb-check",
+    ],
     {
       encoding: "utf8",
       env: {
@@ -36,5 +56,33 @@ test("상위 dry-run 환경에서도 격리 tarball 설치와 CLI 검증을 완�
     0,
     `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   );
-  assert.match(result.stdout, /test-packed-package: OK/);
+  assert.match(result.stdout, /test-packed-package: OK \(@cp949\/bb-check,/u);
+});
+
+test("next-webpack-baseline tarball을 격리 설치하고 facade를 import한다", () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      resolve(import.meta.dirname, "test-packed-package.mjs"),
+      "--package",
+      "@cp949/next-webpack-baseline",
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        npm_config_dry_run: "true",
+      },
+    },
+  );
+
+  assert.equal(
+    result.status,
+    0,
+    `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+  );
+  assert.match(
+    result.stdout,
+    /test-packed-package: OK \(@cp949\/next-webpack-baseline,/u,
+  );
 });

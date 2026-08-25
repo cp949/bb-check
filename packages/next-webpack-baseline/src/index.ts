@@ -1,3 +1,10 @@
+import { resolveBrowserBaseline } from "./baseline.js";
+import { normalizeConfig } from "./config.js";
+import {
+  createWebpackPlugin,
+  type WebpackPluginInstance,
+} from "./webpack-plugin.js";
+
 export interface NextWebpackBaselineConfig {
   readonly projectDir: string;
   readonly policy: readonly PackagePolicy[];
@@ -16,8 +23,11 @@ export interface PackageWaiver {
 }
 
 export interface NextWebpackBaseline {
-  readonly options: NextWebpackBaselineConfig;
+  readonly transpilePackages: readonly string[];
+  webpackPlugin(options: { readonly dev: boolean }): WebpackPluginInstance;
 }
+
+export type { WebpackPluginInstance } from "./webpack-plugin.js";
 
 export const defineConfig = <T extends NextWebpackBaselineConfig>(
   input: T,
@@ -25,4 +35,14 @@ export const defineConfig = <T extends NextWebpackBaselineConfig>(
 
 export const createNextWebpackBaseline = (
   input: NextWebpackBaselineConfig,
-): NextWebpackBaseline => ({ options: input });
+): NextWebpackBaseline => {
+  const config = normalizeConfig(input);
+  const baseline = resolveBrowserBaseline(config.projectDir);
+
+  return {
+    transpilePackages: [...config.policyByPackage.keys()],
+    webpackPlugin(options) {
+      return createWebpackPlugin({ config, baseline }, options);
+    },
+  };
+};
