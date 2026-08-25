@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createNextWebpackBaseline, defineConfig } from "../src/index.js";
@@ -112,7 +112,7 @@ describe("@cp949/next-webpack-baseline 공개 package 계약", () => {
     expect(typeof facade.webpackPlugin({ dev: true }).apply).toBe("function");
   });
 
-  it("빌드된 declaration을 A2 config 계약으로 소비자 typecheck한다", async () => {
+  it("packed declaration의 exports.types를 A2 config 계약으로 소비자 typecheck한다", async () => {
     const npmCliPath = process.env.npm_execpath;
     if (npmCliPath === undefined) {
       throw new Error("npm_execpath가 없어 package build를 실행할 수 없다");
@@ -132,19 +132,56 @@ describe("@cp949/next-webpack-baseline 공개 package 계약", () => {
       join(tmpdir(), "next-webpack-baseline-types-"),
     );
     try {
-      const declarationImport = relative(
-        consumerDir,
-        resolve(packageDir, "dist/index.js"),
-      )
-        .split(sep)
-        .join("/");
-      const specifier = declarationImport.startsWith(".")
-        ? declarationImport
-        : `./${declarationImport}`;
+      const packDir = join(consumerDir, "pack");
+      await mkdir(packDir, { recursive: true });
+      const pack = spawnSync(
+        process.execPath,
+        [npmCliPath, "pack", "--json", "--pack-destination", packDir],
+        {
+          cwd: packageDir,
+          encoding: "utf8",
+          env: { ...process.env, npm_config_dry_run: "false" },
+        },
+      );
+      expect(pack.status, `${pack.stdout}${pack.stderr}`).toBe(0);
+      const [{ filename }] = JSON.parse(pack.stdout) as [{ filename: string }];
+
+      await writeFile(
+        join(consumerDir, "package.json"),
+        `${JSON.stringify(
+          {
+            name: "next-webpack-baseline-type-consumer",
+            private: true,
+            type: "module",
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const install = spawnSync(
+        process.execPath,
+        [
+          npmCliPath,
+          "install",
+          "--save-dev",
+          join(packDir, filename),
+          "--no-audit",
+          "--no-fund",
+          "--loglevel=error",
+        ],
+        {
+          cwd: consumerDir,
+          encoding: "utf8",
+          env: { ...process.env, npm_config_dry_run: "false" },
+        },
+      );
+      expect(install.status, `${install.stdout}${install.stderr}`).toBe(0);
+
       await writeFile(
         join(consumerDir, "consumer.ts"),
         [
-          `import { createNextWebpackBaseline, defineConfig, type NextWebpackBaselineConfig, type PackagePolicy, type PackageWaiver } from ${JSON.stringify(specifier)};`,
+          'import { createNextWebpackBaseline, defineConfig, type NextWebpackBaselineConfig, type PackagePolicy, type PackageWaiver } from "@cp949/next-webpack-baseline";',
           "",
           'const policy: PackagePolicy = { package: "example-package", reason: "legacy syntax check" };',
           'const waiver: PackageWaiver = { package: "example-package", reason: "reviewed entrypoint", allowedEntrypoints: ["dist/index.js"] };',
@@ -168,7 +205,8 @@ describe("@cp949/next-webpack-baseline 공개 package 계약", () => {
               moduleResolution: "NodeNext",
               target: "ES2022",
               noEmit: true,
-              skipLibCheck: true,
+              skipLibCheck: false,
+              types: [],
             },
             files: ["consumer.ts"],
           },

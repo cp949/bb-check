@@ -24,14 +24,13 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 // `new URL(...)` global 대신 fileURLToPath + dirname을 쓴다 — 저장소
 // eslint globals 설정(process/console만 허용)과 충돌하지 않는다.
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const useShell = process.platform === "win32";
 
 const PACKAGE_DIR_NAMES = new Map([
   ["@cp949/bb-check", "bb-check"],
@@ -58,11 +57,36 @@ export const forceActualNpmOperationEnv = (env) => ({
   npm_config_dry_run: "false",
 });
 
+/** Windows npm/npx는 shell을 쓰지 않고 각 CLI를 Node로 직접 실행한다. */
+export const createCommandInvocation = (
+  command,
+  args,
+  {
+    platform = process.platform,
+    npmExecPath = process.env.npm_execpath,
+    nodeExecPath = process.execPath,
+  } = {},
+) => {
+  if (platform !== "win32" || (command !== "npm" && command !== "npx")) {
+    return { command, args };
+  }
+  if (typeof npmExecPath !== "string" || npmExecPath.length === 0) {
+    throw new Error(
+      "Windows에서는 npm_execpath가 필요합니다. npm script로 실행하세요.",
+    );
+  }
+  const cliPath =
+    command === "npm"
+      ? npmExecPath
+      : win32.join(win32.dirname(npmExecPath), "npx-cli.js");
+  return { command: nodeExecPath, args: [cliPath, ...args] };
+};
+
 /** 실패 시 stdout/stderr을 포함한 진단 메시지로 던진다. */
 const run = (label, command, args, options) => {
-  const result = spawnSync(command, args, {
+  const invocation = createCommandInvocation(command, args);
+  const result = spawnSync(invocation.command, invocation.args, {
     encoding: "utf8",
-    shell: useShell,
     ...options,
   });
   if (result.error) {

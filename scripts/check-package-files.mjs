@@ -9,7 +9,19 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const defaultRepoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const useShell = process.platform === "win32";
+
+const PUBLIC_ALLOWED_EXACT = new Set(["README.md", "LICENSE", "package.json"]);
+const DIST_FILE_DECLARATIONS = new Set(["dist", "dist/", "dist/*", "dist/**"]);
+const LEGACY_FORBIDDEN_DEPENDENCIES = new Set([
+  "@cp949/bb-core",
+  "@cp949/bb-library",
+  "@cp949/bb-nextjs",
+]);
+const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "peerDependencies",
+  "optionalDependencies",
+];
 
 const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
 
@@ -83,11 +95,34 @@ export const discoverPublicWorkspacePackages = async (repoRoot) =>
     ({ manifest }) => manifest.private !== true,
   );
 
+/** Windows에서는 npm.cmd를 shell로 열지 않고 npm CLI를 Node로 실행한다. */
+export const createCommandInvocation = (
+  command,
+  args,
+  {
+    platform = process.platform,
+    npmExecPath = process.env.npm_execpath,
+    nodeExecPath = process.execPath,
+  } = {},
+) => {
+  if (platform !== "win32" || command !== "npm") return { command, args };
+  if (typeof npmExecPath !== "string" || npmExecPath.length === 0) {
+    throw new Error(
+      "Windows에서는 npm_execpath가 필요합니다. npm script로 실행하세요.",
+    );
+  }
+  return { command: nodeExecPath, args: [npmExecPath, ...args] };
+};
+
 const readNpmPackFiles = ({ packageDir, workspacePath }) => {
-  const result = spawnSync("npm", ["pack", "--dry-run", "--json"], {
+  const invocation = createCommandInvocation("npm", [
+    "pack",
+    "--dry-run",
+    "--json",
+  ]);
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd: packageDir,
     encoding: "utf8",
-    shell: useShell,
   });
   if (result.error) {
     throw new Error(
@@ -120,51 +155,144 @@ const readNpmPackFiles = ({ packageDir, workspacePath }) => {
 const normalizeArtifactPath = (value) =>
   value.startsWith("./") ? value.slice(2) : value;
 
+const isAllowedPublicPath = (path) =>
+  PUBLIC_ALLOWED_EXACT.has(path) || path.startsWith("dist/");
+
+const isAllowedFilesDeclaration = (value) => {
+  const normalized = normalizeArtifactPath(value);
+  return (
+    PUBLIC_ALLOWED_EXACT.has(normalized) ||
+    DIST_FILE_DECLARATIONS.has(normalized)
+  );
+};
+
 const isCoveredByFiles = (path, patterns) =>
   patterns.some((pattern) => {
     const normalized = normalizeArtifactPath(pattern);
-    if (normalized.endsWith("/**")) {
-      return path.startsWith(normalized.slice(0, -2));
-    }
-    if (normalized.endsWith("/*")) {
-      const prefix = normalized.slice(0, -1);
-      return (
-        path.startsWith(prefix) && !path.slice(prefix.length).includes("/")
-      );
-    }
+    if (DIST_FILE_DECLARATIONS.has(normalized)) return path.startsWith("dist/");
     return path === normalized;
   });
 
-const collectTargets = (value, targets) => {
+const invalidExportTarget = (problems, workspacePath, label, value) => {
+  const type =
+    value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  problems.push(
+    formatProblem(
+      workspacePath,
+      "exports",
+      `${label}: invalid export target type (${type})`,
+    ),
+  );
+};
+
+const collectExportTargets = (
+  value,
+  label,
+  workspacePath,
+  problems,
+  targets,
+) => {
+  if (value === null) return;
   if (typeof value === "string") {
     targets.push(value);
-  } else if (Array.isArray(value)) {
-    for (const item of value) collectTargets(item, targets);
-  } else if (typeof value === "object" && value !== null) {
-    for (const item of Object.values(value)) collectTargets(item, targets);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      collectExportTargets(
+        item,
+        `${label}[${index}]`,
+        workspacePath,
+        problems,
+        targets,
+      ),
+    );
+    return;
+  }
+  if (typeof value !== "object") {
+    invalidExportTarget(problems, workspacePath, label, value);
+    return;
+  }
+
+  const keys = Object.keys(value);
+  if (keys.some((key) => key.startsWith("."))) {
+    problems.push(
+      formatProblem(
+        workspacePath,
+        "exports",
+        `${label}: condition map 안에는 subpath key를 사용할 수 없습니다.`,
+      ),
+    );
+  }
+  for (const [condition, target] of Object.entries(value)) {
+    collectExportTargets(
+      target,
+      `${label}.${condition}`,
+      workspacePath,
+      problems,
+      targets,
+    );
   }
 };
 
-const exportEntries = (exportsField) => {
-  if (typeof exportsField === "string" || Array.isArray(exportsField)) {
-    return [[".", exportsField]];
+const validatedExportEntries = (exportsField, workspacePath, problems) => {
+  if (exportsField === undefined) {
+    problems.push(
+      formatProblem(workspacePath, "exports", "manifest exports가 없습니다."),
+    );
+    return [];
   }
-  if (typeof exportsField !== "object" || exportsField === null) return [];
-  const entries = Object.entries(exportsField);
-  if (entries.some(([key]) => key.startsWith("."))) return entries;
-  return [[".", exportsField]];
+  if (
+    exportsField !== null &&
+    typeof exportsField === "object" &&
+    !Array.isArray(exportsField)
+  ) {
+    const entries = Object.entries(exportsField);
+    const subpathKeys = entries.filter(([key]) => key.startsWith("."));
+    const conditionKeys = entries.filter(([key]) => !key.startsWith("."));
+    if (subpathKeys.length > 0 && conditionKeys.length > 0) {
+      problems.push(
+        formatProblem(
+          workspacePath,
+          "exports",
+          "exports에서 subpath key와 condition key를 혼합할 수 없습니다.",
+        ),
+      );
+    }
+    if (subpathKeys.length > 0) {
+      return subpathKeys.map(([subpath, value]) => {
+        const targets = [];
+        collectExportTargets(
+          value,
+          `exports[${JSON.stringify(subpath)}]`,
+          workspacePath,
+          problems,
+          targets,
+        );
+        return [subpath, targets];
+      });
+    }
+  }
+
+  const targets = [];
+  collectExportTargets(
+    exportsField,
+    "exports",
+    workspacePath,
+    problems,
+    targets,
+  );
+  return [[".", targets]];
 };
 
 const declarationFor = (runtimePath) =>
-  runtimePath.replace(/\.(?:mjs|cjs|js)$/u, ".d.ts");
+  runtimePath
+    .replace(/\.mjs$/u, ".d.mts")
+    .replace(/\.cjs$/u, ".d.cts")
+    .replace(/\.js$/u, ".d.ts");
 
-const targetsMatching = (value, pattern) => {
-  const targets = [];
-  collectTargets(value, targets);
-  return targets
-    .map(normalizeArtifactPath)
-    .filter((path) => pattern.test(path));
-};
+const targetsMatching = (targets, pattern) =>
+  targets.map(normalizeArtifactPath).filter((path) => pattern.test(path));
 
 const binTargetsOf = (bin) => {
   if (typeof bin === "string") return [normalizeArtifactPath(bin)];
@@ -172,6 +300,19 @@ const binTargetsOf = (bin) => {
   return Object.values(bin)
     .filter((value) => typeof value === "string")
     .map(normalizeArtifactPath);
+};
+
+const npmAliasTargetOf = (spec) => {
+  if (!spec.startsWith("npm:")) return undefined;
+  const alias = spec.slice("npm:".length);
+  if (alias.startsWith("@")) {
+    const slash = alias.indexOf("/");
+    if (slash < 0) return alias;
+    const version = alias.indexOf("@", slash);
+    return version < 0 ? alias : alias.slice(0, version);
+  }
+  const version = alias.indexOf("@");
+  return version < 0 ? alias : alias.slice(0, version);
 };
 
 const sourceMapReferences = (source) => {
@@ -213,6 +354,15 @@ const validatePackage = async ({
     );
   } else {
     for (const path of packedPaths) {
+      if (!isAllowedPublicPath(path)) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "files",
+            `tarball 파일이 공개 allowlist 밖입니다: ${path}`,
+          ),
+        );
+      }
       if (!isCoveredByFiles(path, files)) {
         problems.push(
           formatProblem(
@@ -224,6 +374,16 @@ const validatePackage = async ({
       }
     }
     for (const pattern of files) {
+      if (!isAllowedFilesDeclaration(pattern)) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "files",
+            `manifest files 항목이 공개 allowlist 밖입니다: ${pattern}`,
+          ),
+        );
+        continue;
+      }
       if (!packedPaths.some((path) => isCoveredByFiles(path, [pattern]))) {
         problems.push(
           formatProblem(
@@ -236,15 +396,12 @@ const validatePackage = async ({
     }
   }
 
-  const exports = exportEntries(manifest.exports);
-  if (exports.length === 0) {
-    problems.push(
-      formatProblem(workspacePath, "exports", "manifest exports가 없습니다."),
-    );
-  }
-  for (const [subpath, value] of exports) {
-    const targets = [];
-    collectTargets(value, targets);
+  const exports = validatedExportEntries(
+    manifest.exports,
+    workspacePath,
+    problems,
+  );
+  for (const [subpath, targets] of exports) {
     for (const target of targets) {
       if (!target.startsWith("./")) {
         problems.push(
@@ -265,8 +422,8 @@ const validatePackage = async ({
       }
     }
 
-    const runtimes = targetsMatching(value, /\.(?:mjs|cjs|js)$/u);
-    const declarations = targetsMatching(value, /\.d\.(?:mts|cts|ts)$/u);
+    const runtimes = targetsMatching(targets, /\.(?:mjs|cjs|js)$/u);
+    const declarations = targetsMatching(targets, /\.d\.(?:mts|cts|ts)$/u);
     for (const runtimePath of runtimes) {
       const candidates = [...declarations, declarationFor(runtimePath)];
       if (!candidates.some((path) => packed.has(path))) {
@@ -303,7 +460,7 @@ const validatePackage = async ({
   }
 
   const sourceCandidates = packedPaths.filter((path) =>
-    /(?:\.d\.ts|\.(?:mjs|cjs|js))$/u.test(path),
+    /(?:\.d\.(?:mts|cts|ts)|\.(?:mjs|cjs|js))$/u.test(path),
   );
   for (const sourcePath of sourceCandidates) {
     let source;
@@ -350,8 +507,9 @@ const validatePackage = async ({
     }
   }
   for (const mapPath of packedPaths.filter((path) => path.endsWith(".map"))) {
+    let sourceMap;
     try {
-      JSON.parse(await readFile(join(packageDir, mapPath), "utf8"));
+      sourceMap = JSON.parse(await readFile(join(packageDir, mapPath), "utf8"));
     } catch {
       problems.push(
         formatProblem(
@@ -360,27 +518,70 @@ const validatePackage = async ({
           `sourcemap JSON을 읽을 수 없습니다: ${mapPath}`,
         ),
       );
+      continue;
+    }
+    if (
+      typeof sourceMap !== "object" ||
+      sourceMap === null ||
+      Array.isArray(sourceMap) ||
+      sourceMap.version !== 3 ||
+      !Array.isArray(sourceMap.sources) ||
+      !sourceMap.sources.every((source) => typeof source === "string") ||
+      typeof sourceMap.mappings !== "string"
+    ) {
+      problems.push(
+        formatProblem(
+          workspacePath,
+          "sourcemap",
+          `${mapPath}: version 3, sources 문자열 배열, mappings 문자열이 필요합니다.`,
+        ),
+      );
     }
   }
 
-  const dependencies = manifest.dependencies;
-  if (typeof dependencies === "object" && dependencies !== null) {
+  const forbiddenNames = new Set([
+    ...LEGACY_FORBIDDEN_DEPENDENCIES,
+    ...privateWorkspaceNames,
+  ]);
+  for (const field of DEPENDENCY_FIELDS) {
+    const dependencies = manifest[field];
+    if (typeof dependencies !== "object" || dependencies === null) continue;
     for (const [name, spec] of Object.entries(dependencies)) {
-      if (privateWorkspaceNames.has(name)) {
+      if (forbiddenNames.has(name)) {
         problems.push(
           formatProblem(
             workspacePath,
             "dependencies",
-            `private workspace dependency가 남아 있습니다: ${name}`,
+            `${field}에 공개 불가능한 package가 남아 있습니다: ${name}`,
           ),
         );
       }
-      if (typeof spec === "string" && spec.includes("workspace:")) {
+      if (typeof spec !== "string") {
         problems.push(
           formatProblem(
             workspacePath,
             "dependencies",
-            `workspace: protocol dependency가 남아 있습니다: ${name}`,
+            `${field}[${JSON.stringify(name)}] spec은 문자열이어야 합니다.`,
+          ),
+        );
+        continue;
+      }
+      if (/^(?:workspace|file|link):/u.test(spec)) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "dependencies",
+            `${field}[${JSON.stringify(name)}]에 공개 불가능한 spec이 남아 있습니다: ${spec}`,
+          ),
+        );
+      }
+      const aliasTarget = npmAliasTargetOf(spec);
+      if (aliasTarget !== undefined && forbiddenNames.has(aliasTarget)) {
+        problems.push(
+          formatProblem(
+            workspacePath,
+            "dependencies",
+            `${field} npm alias가 공개 불가능한 package를 가리킵니다: ${aliasTarget}`,
           ),
         );
       }

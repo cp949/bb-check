@@ -3,10 +3,9 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import {
-  forceActualNpmOperationEnv,
-  parsePackageSelection,
-} from "./test-packed-package.mjs";
+import * as packedPackage from "./test-packed-package.mjs";
+
+const { forceActualNpmOperationEnv, parsePackageSelection } = packedPackage;
 
 test("상위 npm publish dry-run에서도 내부 pack과 install은 실제 파일을 만든다", () => {
   const original = {
@@ -32,6 +31,37 @@ test("--package가 없으면 기존 bb-check를 선택하고 package 이름만 �
     /지원하지 않는 공개 package/u,
   );
   assert.throws(() => parsePackageSelection(["--package"]), /사용법/u);
+});
+
+test("Windows npm만 shell 없이 npm CLI를 Node로 실행하고 node -e는 유지한다", () => {
+  assert.deepEqual(
+    packedPackage.createCommandInvocation(
+      "npm",
+      ["pack", "--pack-destination", "C:\\dynamic path"],
+      {
+        platform: "win32",
+        npmExecPath: "C:\\npm cli\\npm-cli.js",
+        nodeExecPath: "C:\\node\\node.exe",
+      },
+    ),
+    {
+      command: "C:\\node\\node.exe",
+      args: [
+        "C:\\npm cli\\npm-cli.js",
+        "pack",
+        "--pack-destination",
+        "C:\\dynamic path",
+      ],
+    },
+  );
+  assert.deepEqual(
+    packedPackage.createCommandInvocation("node", ["-e", "dynamic value"], {
+      platform: "win32",
+      npmExecPath: "C:\\npm cli\\npm-cli.js",
+      nodeExecPath: "C:\\node\\node.exe",
+    }),
+    { command: "node", args: ["-e", "dynamic value"] },
+  );
 });
 
 test("상위 dry-run 환경에서도 bb-check 격리 tarball과 CLI를 검증한다", () => {
