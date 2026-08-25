@@ -26,9 +26,10 @@ const require = createRequire(import.meta.url);
 const babelPluginSupport = require("@babel/compat-data/plugins") as Readonly<
   Record<string, BrowserSupport>
 >;
-const babelPluginBugfixSupport = require(
-  "@babel/compat-data/plugin-bugfixes",
-) as Readonly<Record<string, BrowserSupport>>;
+const babelPluginBugfixSupport =
+  require("@babel/compat-data/plugin-bugfixes") as Readonly<
+    Record<string, BrowserSupport>
+  >;
 
 const COMPAT_DATA_FEATURES: Readonly<Record<SyntaxFeature, string>> = {
   "optional-chaining": "proposal-optional-chaining",

@@ -117,39 +117,34 @@ describe("resolveBrowserBaseline", () => {
   ] satisfies ReadonlyArray<{
     target: string;
     unsupportedSyntax: readonly string[];
-  }>)("compat-data optional chaining 경계 $target을 반영한다", async ({
-    target,
-    unsupportedSyntax,
-  }) => {
-    const fixture = await mkdtemp(resolve(tmpdir(), "nwb-compat-data-"));
-    temporaryDirs.push(fixture);
-    await writeFile(
-      resolve(fixture, "package.json"),
-      JSON.stringify({
-        name: "compat-data-fixture",
-        private: true,
-        browserslist: { production: [target] },
-      }),
-      "utf8",
-    );
+  }>)(
+    "compat-data optional chaining 경계 $target을 반영한다",
+    async ({ target, unsupportedSyntax }) => {
+      const fixture = await mkdtemp(resolve(tmpdir(), "nwb-compat-data-"));
+      temporaryDirs.push(fixture);
+      await writeFile(
+        resolve(fixture, "package.json"),
+        JSON.stringify({
+          name: "compat-data-fixture",
+          private: true,
+          browserslist: { production: [target] },
+        }),
+        "utf8",
+      );
 
-    const baseline = resolveBrowserBaseline(fixture);
+      const baseline = resolveBrowserBaseline(fixture);
 
-    expect(baseline.targets).toEqual([target]);
-    expect([...baseline.unsupportedSyntax].sort()).toEqual(unsupportedSyntax);
-  });
+      expect(baseline.targets).toEqual([target]);
+      expect([...baseline.unsupportedSyntax].sort()).toEqual(unsupportedSyntax);
+    },
+  );
 
-  it.each([
-    "ios_saf 13.4-13.7",
-    "and_chr 120",
-    "and_ff 120",
-    "op_mob 80",
-  ])(
+  it.each(["ios_saf 13.4-13.7", "and_chr 120", "and_ff 120", "op_mob 80"])(
     "알려진 Browserslist alias $0의 하한 target을 compat browser로 정규화한다",
     (target) => {
-      expect(
-        isSyntaxUnsupportedForTarget("optional-chaining", target),
-      ).toBe(false);
+      expect(isSyntaxUnsupportedForTarget("optional-chaining", target)).toBe(
+        false,
+      );
     },
   );
 

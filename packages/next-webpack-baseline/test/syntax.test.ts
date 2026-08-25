@@ -37,7 +37,7 @@ describe("analyzeSyntax", () => {
     },
     {
       feature: "private-methods",
-      source: "class Vault { #readToken() { return \"secret\"; } }",
+      source: 'class Vault { #readToken() { return "secret"; } }',
     },
     {
       feature: "class-properties",
@@ -103,14 +103,17 @@ describe("analyzeSyntax", () => {
     "const [first, ...remaining] = values;",
     "const copy = [...values];",
     "class Example { run() {} static create() {} }",
-  ])("object rest/spread 및 class property가 아닌 source는 clean으로 판정한다", (source) => {
-    const analysis = analyzeSyntax(
-      source,
-      baselineFor(["object-rest-spread", "class-properties"]),
-    );
+  ])(
+    "object rest/spread 및 class property가 아닌 source는 clean으로 판정한다",
+    (source) => {
+      const analysis = analyzeSyntax(
+        source,
+        baselineFor(["object-rest-spread", "class-properties"]),
+      );
 
-    expect(analysis.diagnostics).toEqual([]);
-  });
+      expect(analysis.diagnostics).toEqual([]);
+    },
+  );
 
   it("여러 feature diagnostic을 AST 순회 순서와 무관하게 안정적으로 정렬한다", () => {
     const analysis = analyzeSyntax(
