@@ -1,4 +1,5 @@
 import { LegacyBrowserSmokeError } from "./errors.js";
+import { normalizeSignalText } from "./signal.js";
 
 export interface LegacyBrowserSmokeConfig {
   readonly pages: readonly SmokePage[];
@@ -185,10 +186,11 @@ const normalizePage = (value: unknown): SmokePage => {
 };
 
 const normalizePattern = (value: unknown): string => {
-  if (typeof value !== "string") return configInvalid();
-  const pattern = value.replace(/\r\n?/gu, "\n").trim();
-  if (pattern === "") return configInvalid();
-  return pattern;
+  try {
+    return normalizeSignalText(value);
+  } catch {
+    return configInvalid();
+  }
 };
 
 const normalizeSignal = (value: unknown): KnownUnsupportedSignal => {

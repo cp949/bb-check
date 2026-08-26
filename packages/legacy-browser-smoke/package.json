@@ -29,5 +29,11 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests --no-file-parallelism",
     "lint": "eslint . --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "yauzl": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/yauzl": "^3.4.0"
   }
 }
