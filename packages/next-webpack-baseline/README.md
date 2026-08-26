@@ -77,3 +77,13 @@ package-relative 파일 경로와 정확히 일치할 때만 적용된다. 사�
 
 `NWB_SYNTAX_PARSE_INCOMPLETE`는 분석 누락 가능성을 뜻하므로 exact waiver가
 있어도 통과시키지 않는 fail-closed 오류다.
+
+## 보안
+
+취약점은 공개 Issue 대신
+[GitHub의 비공개 보안 취약점 신고 양식](https://github.com/cp949/bb-check/security/advisories/new)으로
+신고한다.
+
+## 라이선스
+
+[MIT](./LICENSE)
