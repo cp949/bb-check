@@ -9,7 +9,9 @@ export interface StylesheetSource {
 }
 
 export interface PageSignal {
-  readonly kind: "console" | "page-error" | "request-failed" | "http-error";
+  readonly kind:
+    | "console" | "page-error" | "request-failed" | "http-error"
+    | "script-parse" | "script-pending" | "path-mismatch";
   readonly text: string;
 }
 

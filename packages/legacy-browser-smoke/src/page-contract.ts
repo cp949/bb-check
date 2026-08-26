@@ -1,7 +1,7 @@
 import type { KnownUnsupportedSignal, ReadyCondition } from "./config.js";
 import { LegacyBrowserSmokeError } from "./errors.js";
 import type { PageSignal } from "./resources.js";
-import { normalizeSignalText } from "./signal.js";
+import { normalizeSignalText, scriptParsePatternText } from "./signal.js";
 
 /**
  * 순수 판정 모듈. CDP 호출이나 I/O 없이 origin 검증, ready 조건 컴파일,
@@ -121,6 +121,92 @@ export const navigateErrorText = (
   }
 };
 
+/** 선언 하나를 수집 신호의 텍스트 축과 같은 pattern으로 투영한다. */
+export const declarationPattern = (
+  declaration: KnownUnsupportedSignal,
+): string =>
+  declaration.kind === "script-parse"
+    ? scriptParsePatternText(
+        declaration.sourcePath,
+        declaration.lineNumber,
+        declaration.columnNumber,
+      )
+    : declaration.pattern;
+
+const scriptParsePosition = (value: unknown): number | "?" =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : "?";
+
+const scriptParseSourceText = (
+  url: unknown,
+  canonicalOrigin: string,
+): string => {
+  if (typeof url !== "string" || url === "") return "unknown";
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "unknown";
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return parsed.protocol;
+  }
+  return parsed.origin === canonicalOrigin
+    ? parsed.pathname
+    : `${parsed.origin}${parsed.pathname}`;
+};
+
+/**
+ * `Debugger.scriptFailedToParse` event 하나를 script-parse 신호 텍스트로
+ * 렌더링한다. 대상 origin 위 URL만 `/` 시작 pathname이 되어 선언과 매칭될 수
+ * 있고, 그 외(타 origin, 기타 스킴, 해석 불가, 비정상 위치)는 선언 sourcePath
+ * 규칙과 충돌할 수 없는 텍스트로 남아 항상 unexpected가 된다(fail-closed).
+ * 절대 throw하지 않는다.
+ */
+export const scriptParseSignalText = (
+  params: object,
+  canonicalOrigin: string,
+): string => {
+  const record = isRecord(params) ? params : {};
+  return scriptParsePatternText(
+    scriptParseSourceText(record.url, canonicalOrigin),
+    scriptParsePosition(record.startLine),
+    scriptParsePosition(record.startColumn),
+  );
+};
+
+/**
+ * `Page.getNavigationHistory` 응답에서 current entry의 최종 경로를 읽는다.
+ * 대상 origin 위의 URL이면 pathname을, 그 외·형식 이상은 null을 돌려준다.
+ * 절대 throw하지 않는다.
+ */
+export const finalPathFrom = (
+  historyResult: unknown,
+  canonicalOrigin: string,
+): string | null => {
+  try {
+    if (!isRecord(historyResult)) return null;
+    const entries = historyResult.entries;
+    const currentIndex = historyResult.currentIndex;
+    if (!Array.isArray(entries) || typeof currentIndex !== "number") {
+      return null;
+    }
+    const entry: unknown = entries[currentIndex];
+    if (!isRecord(entry) || typeof entry.url !== "string") return null;
+    const parsed = new URL(entry.url);
+    return parsed.origin === canonicalOrigin ? parsed.pathname : null;
+  } catch {
+    return null;
+  }
+};
+
+/** `expectedPath` 불일치 신호의 텍스트. */
+export const pathMismatchText = (
+  expectedPath: string,
+  finalPath: string | null,
+): string => `expected=${expectedPath}; final=${finalPath ?? "null"}`;
+
 export interface KnownUnsupportedMatch {
   readonly unexpectedSignals: readonly PageSignal[];
   readonly missingKnownUnsupported: readonly KnownUnsupportedSignal[];
@@ -156,7 +242,7 @@ export const matchKnownUnsupported = (
 
   const missingKnownUnsupported: KnownUnsupportedSignal[] = [];
   for (const declaration of declarations) {
-    const key = `${declaration.kind} ${declaration.pattern}`;
+    const key = `${declaration.kind} ${declarationPattern(declaration)}`;
     const bucket = buckets.get(key) ?? [];
     const matched = Math.min(declaration.count, bucket.length);
     bucket.splice(0, matched);
@@ -177,7 +263,10 @@ export const matchKnownUnsupported = (
     compareKey(`${a.kind} ${a.text}`, `${b.kind} ${b.text}`),
   );
   missingKnownUnsupported.sort((a, b) =>
-    compareKey(`${a.kind} ${a.pattern}`, `${b.kind} ${b.pattern}`),
+    compareKey(
+      `${a.kind} ${declarationPattern(a)}`,
+      `${b.kind} ${declarationPattern(b)}`,
+    ),
   );
 
   return Object.freeze({

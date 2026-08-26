@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { KnownUnsupportedSignal } from "../src/config.js";
+import type { KnownUnsupportedTextSignal } from "../src/config.js";
 import { LegacyBrowserSmokeError } from "../src/errors.js";
 import {
+  finalPathFrom,
   isReadyResult,
   matchKnownUnsupported,
   navigateErrorText,
+  pathMismatchText,
   readyExpression,
+  scriptParseSignalText,
   validateLoopbackOrigin,
 } from "../src/page-contract.js";
 import type { PageSignal } from "../src/resources.js";
@@ -282,11 +285,11 @@ describe("matchKnownUnsupported", () => {
   });
 
   const declaration = (
-    kind: KnownUnsupportedSignal["kind"],
+    kind: KnownUnsupportedTextSignal["kind"],
     pattern: string,
     count: number,
     reason = "레거시 신호",
-  ): KnownUnsupportedSignal => ({ kind, pattern, count, reason });
+  ): KnownUnsupportedTextSignal => ({ kind, pattern, count, reason });
 
   it("선언한 count와 정확히 같은 개수의 signal은 두 출력 배열을 모두 비운다", () => {
     const result = matchKnownUnsupported(
@@ -388,5 +391,155 @@ describe("matchKnownUnsupported", () => {
     expect(Object.isFrozen(result.unexpectedSignals[0])).toBe(true);
     expect(Object.isFrozen(result.missingKnownUnsupported)).toBe(true);
     expect(Object.isFrozen(result.missingKnownUnsupported[0])).toBe(true);
+  });
+});
+
+describe("scriptParseSignalText", () => {
+  const origin = "http://127.0.0.1:3000";
+
+  it("대상 origin 위 URL은 pathname과 위치로 canonical 텍스트를 만든다", () => {
+    expect(
+      scriptParseSignalText(
+        { url: "http://127.0.0.1:3000/_next/static/chunks/a.js?v=1", startLine: 0, startColumn: 0 },
+        origin,
+      ),
+    ).toBe("path=/_next/static/chunks/a.js; line=0; column=0");
+  });
+
+  it("타 origin http URL은 origin+pathname으로 남겨 선언과 충돌하지 않게 한다", () => {
+    expect(
+      scriptParseSignalText(
+        { url: "http://evil.example/a.js", startLine: 0, startColumn: 0 },
+        origin,
+      ),
+    ).toBe("path=http://evil.example/a.js; line=0; column=0");
+  });
+
+  it("http 계열이 아닌 스킴은 protocol만 남긴다", () => {
+    expect(
+      scriptParseSignalText(
+        { url: "data:text/javascript,00", startLine: 0, startColumn: 0 },
+        origin,
+      ),
+    ).toBe("path=data:; line=0; column=0");
+  });
+
+  it("url이 없거나 해석 불가능하면 unknown으로 기록한다", () => {
+    expect(
+      scriptParseSignalText({ startLine: 0, startColumn: 0 }, origin),
+    ).toBe("path=unknown; line=0; column=0");
+    expect(
+      scriptParseSignalText(
+        { url: "%%not-a-url", startLine: 0, startColumn: 0 },
+        origin,
+      ),
+    ).toBe("path=unknown; line=0; column=0");
+  });
+
+  it("위치가 0 이상 정수가 아니면 ?로 기록해 어떤 선언과도 일치하지 않게 한다", () => {
+    expect(
+      scriptParseSignalText(
+        { url: "http://127.0.0.1:3000/a.js", startLine: -1, startColumn: 1.5 },
+        origin,
+      ),
+    ).toBe("path=/a.js; line=?; column=?");
+  });
+});
+
+describe("matchKnownUnsupported — script-parse 위치 선언", () => {
+  it("script-parse 신호는 위치 선언과 count 단위로 소비된다", () => {
+    const result = matchKnownUnsupported(
+      [
+        { kind: "script-parse", text: "path=/a.js; line=0; column=0" },
+        { kind: "script-parse", text: "path=/a.js; line=0; column=0" },
+      ],
+      [
+        {
+          kind: "script-parse",
+          sourcePath: "/a.js",
+          lineNumber: 0,
+          columnNumber: 0,
+          count: 2,
+          reason: "이유",
+        },
+      ],
+    );
+
+    expect(result.unexpectedSignals).toEqual([]);
+    expect(result.missingKnownUnsupported).toEqual([]);
+  });
+
+  it("위치가 다른 script-parse 신호는 unexpected로 남고 선언 부족분은 missing에 남는다", () => {
+    const result = matchKnownUnsupported(
+      [{ kind: "script-parse", text: "path=/b.js; line=3; column=7" }],
+      [
+        {
+          kind: "script-parse",
+          sourcePath: "/a.js",
+          lineNumber: 0,
+          columnNumber: 0,
+          count: 1,
+          reason: "이유",
+        },
+      ],
+    );
+
+    expect(result.unexpectedSignals).toEqual([
+      { kind: "script-parse", text: "path=/b.js; line=3; column=7" },
+    ]);
+    expect(result.missingKnownUnsupported).toEqual([
+      {
+        kind: "script-parse",
+        sourcePath: "/a.js",
+        lineNumber: 0,
+        columnNumber: 0,
+        count: 1,
+        reason: "이유",
+      },
+    ]);
+  });
+});
+
+describe("finalPathFrom", () => {
+  const origin = "http://127.0.0.1:3000";
+
+  it("current entry가 대상 origin이면 pathname을 돌려준다", () => {
+    expect(
+      finalPathFrom(
+        {
+          currentIndex: 1,
+          entries: [
+            { url: "http://127.0.0.1:3000/" },
+            { url: "http://127.0.0.1:3000/login?next=%2Fmypage" },
+          ],
+        },
+        origin,
+      ),
+    ).toBe("/login");
+  });
+
+  it("타 origin·형식 이상·색인 이탈은 전부 null이다", () => {
+    expect(
+      finalPathFrom(
+        { currentIndex: 0, entries: [{ url: "http://evil.example/x" }] },
+        origin,
+      ),
+    ).toBeNull();
+    expect(finalPathFrom({ currentIndex: 5, entries: [] }, origin)).toBeNull();
+    expect(finalPathFrom(undefined, origin)).toBeNull();
+    expect(
+      finalPathFrom({ currentIndex: 0, entries: [{ url: 123 }] }, origin),
+    ).toBeNull();
+  });
+});
+
+describe("pathMismatchText", () => {
+  it("기대 경로와 최종 경로를 나란히 렌더링하고 null은 문자 그대로 남긴다", () => {
+    expect(pathMismatchText("/mypage", "/login")).toBe(
+      "expected=/mypage; final=/login",
+    );
+    expect(pathMismatchText("/mypage", null)).toBe(
+      "expected=/mypage; final=null",
+    );
   });
 });
