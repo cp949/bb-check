@@ -14,11 +14,14 @@ console/page-error, 실패한 요청)를 판정한다.
   지정하는 경우에는 다른 플랫폼에서도 동작한다
 - Node.js 22 이상(`LBS_NODE_UNSUPPORTED`)
 - 소비자가 지정한 loopback origin의 page 여러 개를 순회하며 로드 성공 여부와
-  console/page-error/request-failed 신호를 판정
+  console/page-error/request-failed/script-parse/script-pending/path-mismatch
+  신호를 판정
 - package 자신의 `selfTest()` — baseline page 로드와 legacy 구문 거부를
   package 내부 고정 page 두 개로 검증
 
-원격 URL smoke, 인증, 브라우저 자동화(클릭·입력 등)는 지원하지 않는다.
+원격 URL smoke와 브라우저 자동화(클릭·입력 등)는 지원하지 않는다. 인증 상태
+준비는 `injectBeforeNavigate` 하나로만 가능하다 — raw CDP session은 노출하지
+않는다.
 
 ## 고정 브라우저와 checksum
 
@@ -73,6 +76,38 @@ cache 위치로 절대 쓰이지 않는다 — 그런 `cacheDirectory`/`XDG_CACH
 원격 URL을 대상으로 한 smoke는 지원하지 않는다. 소비자는 검사 대상 서버를
 loopback으로 미리 띄운 뒤 그 origin을 넘긴다.
 
+## `injectBeforeNavigate`
+
+`run({ origin, injectBeforeNavigate })`의 `injectBeforeNavigate`는 각 page
+navigate 전에 CDP `Page.addScriptToEvaluateOnNewDocument`로 등록되어, 그
+page가 여는 새 문서마다 실행된다.
+
+- Chromium 75(V8 7.5)가 파싱할 수 있는 구문만 쓸 수 있다.
+- origin 제한이 필요하면 스크립트 스스로 `location.origin`을 확인해야 한다 —
+  package가 별도로 origin을 강제하지 않는다.
+- `selfTest()`에는 적용되지 않는다.
+- 빈 문자열이거나 공백만 있으면 `LBS_CONFIG_INVALID`다.
+
+```ts
+await smoke.run({
+  origin: "http://127.0.0.1:3000",
+  injectBeforeNavigate: "localStorage.setItem('token', 'e2e-fixture-token');",
+});
+```
+
+## `expectedPath`
+
+page 선언에 `expectedPath?: "/..."`를 추가하면, `ready` 조건과 script settle이
+끝난 뒤 CDP `Page.getNavigationHistory`로 그 page의 최종 도착 경로를
+확인한다. 최종 경로가 `expectedPath`와 다르면 그 page는 `path-mismatch`
+신호(text 형식 `expected=<expectedPath>; final=<최종 경로 또는 null>`)로
+fail한다.
+
+- 형식 제약은 `path`와 같다 — `/`로 시작하고 `//`·역슬래시·제어 문자를 포함할
+  수 없다.
+- known-unsupported로 선언할 수 없다 — 리다이렉트나 client-side 이동으로 다른
+  경로에 정착하는 것을 "알려진 예외"로 흡수할 수 없다는 뜻이다.
+
 ## no-sandbox 위험
 
 ```text
@@ -89,18 +124,20 @@ sandbox를 애초에 쓸 수 없는 환경에서만 사용한다. 신뢰할 수 
 
 ## 인증 비지원과 소비자 책임 경계
 
-이 package는 인증/login/storage codec을 소유하지 않는다. 인증이 필요한
-page를 검사하려면 소비자가 이미 인증을 통과한 상태로 loopback에 접근 가능한
-서버(또는 그런 상태를 만드는 adapter)를 준비해 `run`에 origin만 넘긴다.
-공개 package에는 소비자별 callback이나 이름 분기를 추가하지 않는다.
+이 package는 여전히 인증/login/token/storage codec을 소유하지 않는다. 인증
+상태 준비는 `injectBeforeNavigate` 하나로만 가능하다 — 소비자가 storage 주입
+스크립트 문자열(예: `localStorage`/`sessionStorage`에 토큰을 심는 코드)을
+직접 조립해 `run`에 넘기면 package는 그 문자열을 각 page navigate 전에
+그대로 등록만 하고, token 형식이나 codec은 해석하지 않는다. 공개 package에는
+소비자별 callback이나 이름 분기를 추가하지 않는다.
 
-| 소유 주체 | 책임                                                                                        |
-| --------- | ------------------------------------------------------------------------------------------- |
-| 소비자    | route(`pages`) 목록과 각 `path`/`ready` 값                                                  |
-| 소비자    | 앱 전용 `knownUnsupported` 값과 근거(`reason`)                                              |
-| 소비자    | 검사 대상 서버의 시작·종료, 그 서버가 이미 인증된 상태로 응답하게 만드는 일                 |
-| 소비자    | 인증 adapter — 필요하면 소비자가 준비한, 공개 접근 가능한 local route/server를 `run`에 제공 |
-| package   | 고정 Chromium 확보·검증, CDP 실행, page 로드 판정, cleanup                                  |
+| 소유 주체 | 책임                                                                                 |
+| --------- | ------------------------------------------------------------------------------------ |
+| 소비자    | route(`pages`) 목록과 각 `path`/`ready`/`expectedPath` 값                            |
+| 소비자    | 앱 전용 `knownUnsupported` 값과 근거(`reason`)                                       |
+| 소비자    | 검사 대상 서버의 시작·종료, 그 서버가 이미 인증된 상태로 응답하게 만드는 일          |
+| 소비자    | 인증 상태 준비 — storage 주입 스크립트 문자열을 조립해 `injectBeforeNavigate`로 전달 |
+| package   | 고정 Chromium 확보·검증, CDP 실행, page 로드 판정, cleanup                           |
 
 ## cleanup 보장
 
@@ -141,6 +178,14 @@ const smoke = createLegacyBrowserSmoke(
         count: 1,
         reason: "레거시 polyfill이 의도적으로 남기는 경고",
       },
+      {
+        kind: "script-parse",
+        sourcePath: "/_next/static/chunks/268430f7.496c3f1e31a417f7.js",
+        lineNumber: 0,
+        columnNumber: 0,
+        count: 1,
+        reason: "Chrome 75의 AG Grid chunk 문법 미지원",
+      },
     ],
   }),
 );
@@ -152,6 +197,19 @@ if (report.status !== "pass") process.exitCode = 1;
 // 고정 Chromium 자체가 legacy 엔진처럼 동작하는지 package가 스스로 확인한다.
 const selfTestReport = await smoke.selfTest();
 ```
+
+`script-parse` 신호의 text 표현은 `path=<sourcePath>; line=<lineNumber>;
+column=<columnNumber>` 형식이며, 위 예시의 `sourcePath`/`lineNumber`/
+`columnNumber`와 정확히 일치해야 매칭된다.
+
+인라인 `<script>`의 구문 오류는 Chromium 75에서 `page-error`와 `script-parse`
+신호를 모두 만들 수 있다 — known-unsupported로 흡수하려면 두 kind를 모두
+선언해야 한다. 외부 스크립트 파일의 구문 오류는 `script-parse`만 발생한다.
+
+판정 시점까지 끝나지 않은 Script 요청은 `script-pending` 신호(text 형식
+`path=<경로>`)로 남는다. `script-parse`와 달리 다른 텍스트 신호와 같은
+방식으로 `pattern`을 선언해 흡수한다(예:
+`{ kind: "script-pending", pattern: "path=/vendor/chunk.js", count: 1, reason: "..." }`).
 
 ### CLI
 
@@ -182,7 +240,7 @@ exit 1이다. `--help`는 브라우저·네트워크·파일시스템을 전혀 
 
 | 코드                                          | 의미                                                                                                                                             |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `LBS_CONFIG_INVALID`                          | `defineSmokeConfig`/sandbox 옵션 형식 오류                                                                                                       |
+| `LBS_CONFIG_INVALID`                          | `defineSmokeConfig`/`sandbox`/`injectBeforeNavigate` 옵션 형식 오류                                                                              |
 | `LBS_NODE_UNSUPPORTED`                        | Node 22 미만에서 Chromium provisioning 시도                                                                                                      |
 | `LBS_PLATFORM_UNSUPPORTED`                    | Linux x64가 아닌 플랫폼                                                                                                                          |
 | `LBS_CACHE_IO`                                | cache 경로 계산·생성 실패, 또는 설치된 package 디렉터리를 cache로 지정                                                                           |
