@@ -266,7 +266,7 @@ exit 1이다. `--help`는 브라우저·네트워크·파일시스템을 전혀 
 | `LBS_ORIGIN_NOT_LOOPBACK`                     | `run`의 `origin`이 loopback http root가 아님                                                                                                     |
 | `LBS_CONNECT_TIMEOUT` / `LBS_COMMAND_TIMEOUT` | CDP 연결 또는 명령 응답 시간 초과                                                                                                                |
 | `LBS_PAGE_NOT_READY`                          | page attach부터 script settle 대기까지 공유하는 `timeoutMs` deadline 안에 `ready` 조건이 참이 되지 않음                                          |
-| `LBS_ABORTED`                                 | (package 내부 전용) 내부 로직이 자체 `AbortSignal`로 중단시킴 — `selfTest`는 소비자 signal 파라미터를 노출하지 않는다 |
+| `LBS_ABORTED`                                 | `run`에 전달한 `signal`이 abort되거나 내부 로직이 자체 `AbortSignal`로 중단시킴 — `selfTest`는 소비자 signal 파라미터를 노출하지 않으므로 이 코드가 소비자에게 나타나지 않는다 |
 
 ## 보안
 
