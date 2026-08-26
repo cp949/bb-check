@@ -271,6 +271,43 @@ describe("createVerdict", () => {
     expect(verdict).toEqual({ status: "ignored", diagnostics: [] });
   });
 
+  it("barrel 최적화 resource도 unsafe waiver를 ignore 전에 fail-closed 한다", () => {
+    expect(() =>
+      createVerdict({
+        config: configFor({
+          included: true,
+          waivers: [
+            {
+              package: "legacy-widget",
+              reason: "unsafe waiver",
+              allowedEntrypoints: ["../compat.cjs"],
+            },
+          ],
+        }),
+        resource: "__barrel_optimize__",
+        syntax: incompatible,
+        isClientEntryReachable: true,
+      }),
+    ).toThrow(
+      expect.objectContaining<Partial<NextWebpackBaselineError>>({
+        code: "NWB_WAIVER_INVALID",
+      }),
+    );
+  });
+
+  it("Next.js barrel 최적화 condition resource는 도달 여부와 무관하게 ignored 한다", () => {
+    for (const isClientEntryReachable of [true, false]) {
+      const verdict = createVerdict({
+        config: configFor({ included: true }),
+        resource: "__barrel_optimize__",
+        syntax: incompatible,
+        isClientEntryReachable,
+      });
+
+      expect(verdict).toEqual({ status: "ignored", diagnostics: [] });
+    }
+  });
+
   it.each([
     "C:chunk.cjs",
     "relative/chunk.cjs",
@@ -278,6 +315,8 @@ describe("createVerdict", () => {
     "\\consumer\\src\\application.js",
     "/consumer/.yarn/cache/legacy-widget-npm-1.0.0.ZIP/application.js",
     "/consumer/.yarn/__virtual__/legacy-widget/0/application.js",
+    "__barrel_optimize__?names=LegacyButton",
+    "__barrel_optimize__/index.js",
   ])(
     "malformed 또는 opaque resource %s는 도달 여부와 무관하게 unresolved 한다",
     (resource) => {

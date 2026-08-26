@@ -108,6 +108,15 @@ const nodeModulesBoundary = (resource: string): number => {
 export const hasNodeModulesBoundaryClaim = (resource: string): boolean =>
   nodeModulesBoundary(resource) !== -1;
 
+/**
+ * Next.js barrel 최적화 proxy module의 condition resource인지 확인한다.
+ * webpack NormalModule.nameForCondition()은 matchResource(`__barrel_optimize__?names=...`)를
+ * 첫 query 앞에서 잘라 반환하므로 정확히 이 문자열만 매칭한다. proxy는 재노출 글루만 담고
+ * 재노출 대상 package 파일은 별도 module로 게이트되므로 무시해도 게이트 우회가 생기지 않는다.
+ */
+export const isBarrelOptimizeResource = (resource: string): boolean =>
+  resource === "__barrel_optimize__";
+
 /** verdict의 early ignore 전에 절대 resource 형상과 비-opaque filesystem 경로를 보장한다. */
 export const assertResourceShape = (resource: string): void => {
   if (!isAbsoluteResource(resource) || hasOpaqueYarnPath(resource)) {

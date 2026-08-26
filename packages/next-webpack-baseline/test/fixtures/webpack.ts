@@ -34,6 +34,8 @@ const createVoidSyncHook = (): VoidSyncHook => {
 
 export interface WebpackModuleDefinition {
   readonly resource?: unknown;
+  /** webpack `<matchResource>!=!<request>` 문법의 matchResource. nameForCondition()이 resource 대신 이 값을 사용한다. */
+  readonly matchResource?: string;
   readonly loaderSource:
     string | Uint8Array | null | { readonly unsupported: true };
   readonly beforeLoadersSource?: string;
@@ -153,8 +155,11 @@ export const createWebpackFixture = ({
                 throw new Error("fixture condition name call sentinel");
               }
               if (definition.conditionNameShape === "non-string") return 42;
-              return typeof definition.resource === "string"
-                ? definition.resource.split("?", 1)[0]
+              // NormalModule.nameForCondition()과 동일: matchResource 우선, 첫 query 앞에서 자른다.
+              const conditionSource =
+                definition.matchResource ?? definition.resource;
+              return typeof conditionSource === "string"
+                ? conditionSource.split("?", 1)[0]
                 : null;
             },
           }),

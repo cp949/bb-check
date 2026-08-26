@@ -216,6 +216,20 @@ describe("createWebpackPlugin", () => {
     expect(fixture.modules[0]?.sourceReads).toBe(0);
   });
 
+  it("Next.js barrel 최적화 module은 source를 읽지 않고 검사에서 제외한다", () => {
+    const { fixture, errors } = runPlugin({
+      definitions: [
+        {
+          ...pageModule("dist/barrel.js", "const value = input?.value;"),
+          matchResource: "__barrel_optimize__?names=LegacyButton",
+        },
+      ],
+    });
+
+    expect(errors).toEqual([]);
+    expect(fixture.modules[0]?.sourceReads).toBe(0);
+  });
+
   it("실제 resource가 없는 virtual module은 source를 읽지 않는다", () => {
     const { fixture, errors } = runPlugin({
       definitions: [

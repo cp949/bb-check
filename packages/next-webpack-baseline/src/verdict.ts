@@ -2,6 +2,7 @@ import type { NormalizedConfig } from "./config.js";
 import { isDownlevelPackage } from "./downlevel.js";
 import {
   assertResourceShape,
+  isBarrelOptimizeResource,
   isProvenOrdinaryAppResource,
   resolvePackageResource,
 } from "./package-name.js";
@@ -56,6 +57,9 @@ const hasExactWaiver = (
 /** module resource, client graph, syntax 결과를 정책과 waiver에 따라 하나의 안정된 verdict로 결합한다. */
 export const createVerdict = (input: CreateVerdictInput): ModuleVerdict => {
   validateWaivers(input.config.waiversByPackage);
+  if (isBarrelOptimizeResource(input.resource)) {
+    return { status: "ignored", diagnostics: [] };
+  }
   assertResourceShape(input.resource);
   if (isProvenOrdinaryAppResource(input.resource)) {
     return { status: "ignored", diagnostics: [] };
