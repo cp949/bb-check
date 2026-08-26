@@ -283,6 +283,139 @@ describe("createLegacyBrowserSmoke().run", () => {
     expect(inputs).toHaveLength(1);
     expect("sandbox" in (inputs[0] as RunSmokeInput)).toBe(false);
   });
+
+  it("run은 injectBeforeNavigate를 runSmoke까지 그대로 전달한다", async () => {
+    const inputs: RunSmokeInput[] = [];
+    const smoke = createLegacyBrowserSmokeWithAdapters(
+      {
+        pages: [
+          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+        ],
+        timeoutMs: 1_000,
+      },
+      {
+        ensureChromium: async () => executable,
+        runSmoke: async (input) => {
+          inputs.push(input);
+          return {
+            status: "pass",
+            browserVersion: executable.version,
+            pages: [
+              {
+                name: "home",
+                status: "pass",
+                unexpectedSignals: [],
+                missingKnownUnsupported: [],
+              },
+            ],
+          };
+        },
+      },
+    );
+
+    await smoke.run({
+      origin: "http://127.0.0.1:3000",
+      injectBeforeNavigate: "localStorage.setItem('k','v')",
+    });
+
+    expect(inputs[0]?.injectBeforeNavigate).toBe("localStorage.setItem('k','v')");
+  });
+
+  it("run은 injectBeforeNavigate를 생략하면 runSmoke 입력에 key를 만들지 않는다", async () => {
+    const inputs: RunSmokeInput[] = [];
+    const smoke = createLegacyBrowserSmokeWithAdapters(
+      {
+        pages: [
+          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+        ],
+        timeoutMs: 1_000,
+      },
+      {
+        ensureChromium: async () => executable,
+        runSmoke: async (input) => {
+          inputs.push(input);
+          return {
+            status: "pass",
+            browserVersion: executable.version,
+            pages: [],
+          };
+        },
+      },
+    );
+
+    await smoke.run({ origin: "http://127.0.0.1:3000" });
+
+    expect(Object.hasOwn(inputs[0] ?? {}, "injectBeforeNavigate")).toBe(false);
+  });
+
+  it("공백뿐인 injectBeforeNavigate는 Chromium 확보 전에 LBS_CONFIG_INVALID다", async () => {
+    let provisioned = false;
+    const smoke = createLegacyBrowserSmokeWithAdapters(
+      {
+        pages: [
+          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+        ],
+        timeoutMs: 1_000,
+      },
+      {
+        ensureChromium: async () => {
+          provisioned = true;
+          return executable;
+        },
+      },
+    );
+
+    await expect(
+      smoke.run({ origin: "http://127.0.0.1:3000", injectBeforeNavigate: "  " }),
+    ).rejects.toMatchObject({ code: "LBS_CONFIG_INVALID" });
+    expect(provisioned).toBe(false);
+  });
+
+  it("legacy-syntax page에 script-parse 신호가 추가되어도 selfTest 판정은 불변이다", async () => {
+    const smoke = createLegacyBrowserSmokeWithAdapters(
+      {
+        pages: [
+          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+        ],
+        timeoutMs: 1_000,
+      },
+      {
+        ensureChromium: async () => executable,
+        runSmoke: async () => ({
+          status: "fail",
+          browserVersion: executable.version,
+          pages: [
+            {
+              name: "baseline",
+              status: "pass",
+              unexpectedSignals: [],
+              missingKnownUnsupported: [],
+            },
+            {
+              name: "legacy-syntax",
+              status: "fail",
+              unexpectedSignals: [
+                { kind: "page-error", text: "SyntaxError: Unexpected token '.'" },
+                {
+                  kind: "script-parse",
+                  text: "path=/legacy-syntax; line=1; column=0",
+                },
+              ],
+              missingKnownUnsupported: [],
+            },
+          ],
+        }),
+      },
+    );
+
+    const report = await smoke.selfTest();
+
+    expect(report.status).toBe("pass");
+    expect(report.checks).toEqual([
+      { name: "baseline", status: "pass" },
+      { name: "legacy-syntax", status: "pass" },
+    ]);
+  });
 });
 
 describe("createLegacyBrowserSmoke().selfTest", () => {

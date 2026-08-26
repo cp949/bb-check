@@ -6,6 +6,7 @@ import {
   type ReadyCondition,
   type SmokePage,
 } from "./config.js";
+import { LegacyBrowserSmokeError } from "./errors.js";
 import { validateLoopbackOrigin } from "./page-contract.js";
 import type { ChromiumExecutable, EnsureChromiumOptions } from "./preflight.js";
 import type { SandboxDisabledOption, SandboxOption } from "./runtime.js";
@@ -26,6 +27,7 @@ export interface LegacyBrowserSmoke {
     readonly origin: string;
     readonly executablePath?: string;
     readonly sandbox?: SandboxOption | SandboxDisabledOption;
+    readonly injectBeforeNavigate?: string;
   }): Promise<SmokeReport>;
   selfTest(options?: {
     readonly executablePath?: string;
@@ -229,6 +231,19 @@ export const createLegacyBrowserSmokeWithAdapters = (
   const normalizedConfig = defineSmokeConfig(input);
 
   /**
+   * run 전용 옵션 검증. config와 동일하게 LBS_CONFIG_INVALID로 거절한다.
+   */
+  const validateInjectBeforeNavigate = (value: string | undefined): void => {
+    if (value === undefined) return;
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new LegacyBrowserSmokeError(
+        "LBS_CONFIG_INVALID",
+        "injectBeforeNavigate must be a non-empty string",
+      );
+    }
+  };
+
+  /**
    * `EnsureChromiumOptions.executablePath`는 `exactOptionalPropertyTypes` 아래
    * 명시적 `undefined`를 허용하지 않으므로, 값이 있을 때만 key를 만든다.
    */
@@ -244,12 +259,14 @@ export const createLegacyBrowserSmokeWithAdapters = (
       readonly origin: string;
       readonly executablePath?: string;
       readonly sandbox?: SandboxOption | SandboxDisabledOption;
+      readonly injectBeforeNavigate?: string;
     }): Promise<SmokeReport> => {
       // origin은 Chromium을 확보하기 전에 검증한다. 오타 하나로 110MB
       // provisioning을 끝낸 뒤에야 LBS_ORIGIN_NOT_LOOPBACK을 만나면 안 된다.
       // runSmoke가 같은 검증을 다시 하고 정규화까지 하므로(멱등) 여기서는
       // 검증만 하고 원래 origin을 그대로 넘긴다.
       validateLoopbackOrigin(options.origin);
+      validateInjectBeforeNavigate(options.injectBeforeNavigate);
       const executable = await resolveExecutable(options.executablePath);
       return adapters.runSmoke({
         origin: options.origin,
@@ -260,6 +277,11 @@ export const createLegacyBrowserSmokeWithAdapters = (
         // RunSmokeInput.sandbox는 `exactOptionalPropertyTypes` 아래 명시적
         // undefined를 허용하지 않으므로, 값이 있을 때만 key를 만든다.
         ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
+        // RunSmokeInput.injectBeforeNavigate는 `exactOptionalPropertyTypes` 아래
+        // 명시적 undefined를 허용하지 않으므로, 값이 있을 때만 key를 만든다.
+        ...(options.injectBeforeNavigate === undefined
+          ? {}
+          : { injectBeforeNavigate: options.injectBeforeNavigate }),
       });
     },
     selfTest: async (
