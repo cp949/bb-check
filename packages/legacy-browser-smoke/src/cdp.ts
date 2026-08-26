@@ -354,7 +354,12 @@ export interface DeadlineSignal {
   expired(): boolean;
   /** 만료 시 실행할 listener를 등록하고 해제 함수를 돌려준다. */
   onExpire(listener: () => void): () => void;
-  /** 예약된 만료를 취소한다. 이후 어떤 listener도 실행되지 않는다. */
+  /**
+   * 아직 만료되지 않은 예약을 취소해 이후 타이머 발동을 막는다. 이미
+   * 만료된 뒤에 호출해도 `expired()`는 계속 true로 남으며, 그 뒤에
+   * 등록하는 listener는 onExpire의 즉시 실행 경로를 타 여전히 동기
+   * 실행된다 — cancel은 만료 상태 자체를 되돌리지 않는다.
+   */
   cancel(): void;
 }
 

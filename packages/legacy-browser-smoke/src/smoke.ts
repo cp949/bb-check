@@ -49,7 +49,12 @@ export interface RunSmokeInput {
   readonly origin: string;
   readonly executable: ChromiumExecutable;
   readonly pages: readonly SmokePage[];
-  /** ready 조건 budget. 전체 실행이 아니라 page 하나마다 적용된다. */
+  /**
+   * page 하나당 하나의 deadline. 전체 실행이 아니라 page 하나마다 적용되며,
+   * 그 page의 attach(연결)부터 navigate, ready 대기, script settle 대기까지
+   * 전체가 이 예산 하나를 공유한다 — ready 대기와 script 대기는 별도
+   * 예산이 아니다.
+   */
   readonly timeoutMs: number;
   readonly knownUnsupported: readonly KnownUnsupportedSignal[];
   readonly signal?: AbortSignal;

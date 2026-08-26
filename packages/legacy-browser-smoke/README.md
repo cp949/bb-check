@@ -14,7 +14,7 @@ console/page-error, 실패한 요청)를 판정한다.
   지정하는 경우에는 다른 플랫폼에서도 동작한다
 - Node.js 22 이상(`LBS_NODE_UNSUPPORTED`)
 - 소비자가 지정한 loopback origin의 page 여러 개를 순회하며 로드 성공 여부와
-  console/page-error/request-failed/script-parse/script-pending/path-mismatch
+  console/page-error/request-failed/http-error/script-parse/script-pending/path-mismatch
   신호를 판정
 - package 자신의 `selfTest()` — baseline page 로드와 legacy 구문 거부를
   package 내부 고정 page 두 개로 검증
@@ -107,6 +107,9 @@ fail한다.
   수 없다.
 - known-unsupported로 선언할 수 없다 — 리다이렉트나 client-side 이동으로 다른
   경로에 정착하는 것을 "알려진 예외"로 흡수할 수 없다는 뜻이다.
+- 비교 대상은 URL로 직렬화된 pathname이다 — 경로에 공백이나 비ASCII 문자가
+  있으면 `expectedPath`도 `%20` 등 percent-encoding된 형태로 선언해야
+  일치한다.
 
 ## no-sandbox 위험
 
@@ -122,7 +125,7 @@ fail한다.
 sandbox를 애초에 쓸 수 없는 환경에서만 사용한다. 신뢰할 수 없는 host의
 일반 사용자 환경에서 sandbox를 끄지 않는다.
 
-## 인증 비지원과 소비자 책임 경계
+## 인증 경계와 소비자 책임
 
 이 package는 여전히 인증/login/token/storage codec을 소유하지 않는다. 인증
 상태 준비는 `injectBeforeNavigate` 하나로만 가능하다 — 소비자가 storage 주입
@@ -211,6 +214,10 @@ column=<columnNumber>` 형식이며, 위 예시의 `sourcePath`/`lineNumber`/
 방식으로 `pattern`을 선언해 흡수한다(예:
 `{ kind: "script-pending", pattern: "path=/vendor/chunk.js", count: 1, reason: "..." }`).
 
+이 대기는 `ready` 조건 대기와 별도의 예산을 받지 않는다 — `timeoutMs`는 page
+하나당 하나의 deadline이고, 그 page의 attach(연결)부터 navigate, `ready` 조건
+대기, 이 Script settle 대기까지 전체가 그 예산 하나를 공유한다.
+
 ### CLI
 
 ```bash
@@ -253,7 +260,7 @@ exit 1이다. `--help`는 브라우저·네트워크·파일시스템을 전혀 
 | `LBS_SANDBOX_UNAVAILABLE`                     | root에서 sandbox 필수 모드로 실행 시도                                                                                                           |
 | `LBS_ORIGIN_NOT_LOOPBACK`                     | `run`의 `origin`이 loopback http root가 아님                                                                                                     |
 | `LBS_CONNECT_TIMEOUT` / `LBS_COMMAND_TIMEOUT` | CDP 연결 또는 명령 응답 시간 초과                                                                                                                |
-| `LBS_PAGE_NOT_READY`                          | page의 `ready` 조건이 `timeoutMs` 안에 참이 되지 않음                                                                                            |
+| `LBS_PAGE_NOT_READY`                          | page attach부터 script settle 대기까지 공유하는 `timeoutMs` deadline 안에 `ready` 조건이 참이 되지 않음                                          |
 | `LBS_ABORTED`                                 | (package 내부 전용) 내부 로직이 자체 `AbortSignal`로 중단시킴 — 공개 API(`run`/`selfTest`)는 소비자가 signal을 넘기는 파라미터를 노출하지 않는다 |
 
 ## 보안
