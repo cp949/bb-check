@@ -18,7 +18,11 @@ import {
   validateLoopbackOrigin,
 } from "./page-contract.js";
 import type { ChromiumExecutable } from "./preflight.js";
-import { attachPageSession, type RawSession } from "./raw-session.js";
+import {
+  attachPageSession,
+  type PageHandle,
+  type RawSession,
+} from "./raw-session.js";
 import {
   beginPageResourceCollection,
   type PageResourceCollector,
@@ -212,7 +216,15 @@ const runPage = async (
   knownUnsupported: readonly KnownUnsupportedSignal[],
 ): Promise<SmokePageResult> => {
   const deadline = startDeadline(timers, timeoutMs);
-  const pageHandle = await attachPageSession(browserSession);
+  let pageHandle: PageHandle;
+  try {
+    pageHandle = await attachPageSession(browserSession);
+  } catch (error) {
+    // attach 실패로 아래 try/finally에 진입하지 못하면 deadline timer가
+    // 정리되지 않고 남으므로 여기서 직접 취소한다.
+    deadline.cancel();
+    throw error;
+  }
   let resourceCollector: PageResourceCollector | undefined;
   const consoleSignals: PageSignal[] = [];
   let unsubscribeConsole: (() => void) | undefined;

@@ -369,6 +369,11 @@ interface SmokeFixtureOptions {
   )[];
   /** page socket별 responder를 직접 지정한다. 지정한 index는 pageStates를 쓰지 않는다. */
   readonly pageResponders?: readonly Responder[];
+  /**
+   * `http.getJson` 호출 순서(1-based, page attach 순서와 같다)별로 지정한
+   * 메시지의 Error로 거부시킨다. attachPageSession 실패를 흉내내는 용도.
+   */
+  readonly httpJsonFailures?: readonly (string | undefined)[];
 }
 
 const smokeFixture = (options: SmokeFixtureOptions = {}) => {
@@ -380,6 +385,7 @@ const smokeFixture = (options: SmokeFixtureOptions = {}) => {
   const pageStates = options.pageStates ?? [];
   const pageSnapshots = options.pageSnapshots ?? [];
   const pageResponders = options.pageResponders ?? [];
+  const httpJsonFailures = options.httpJsonFailures ?? [];
 
   const createSocket: CdpSocketFactory = (url) => {
     const index = sockets.length;
@@ -428,6 +434,10 @@ const smokeFixture = (options: SmokeFixtureOptions = {}) => {
       getJson: async (url) => {
         httpCalls.push(url);
         const index = httpCalls.length;
+        const failureMessage = httpJsonFailures[index - 1];
+        if (failureMessage !== undefined) {
+          throw new Error(failureMessage);
+        }
         return {
           id: `PAGE${String(index)}`,
           type: "page",
@@ -686,6 +696,24 @@ describe("runSmoke", () => {
     );
     expect(fixture.log).not.toContain("socket2:send:Runtime.evaluate");
     expect(fixture.log).toContain("socket2:send:Page.close");
+    expect(fixture.timers.pendingCount).toBe(0);
+  });
+
+  it("page attach가 http.getJson 실패로 거부되면 runSmoke도 거부되고 deadline timer가 남지 않는다", async () => {
+    const fixture = smokeFixture({
+      httpJsonFailures: ["devtools endpoint unavailable"],
+    });
+
+    const promise = runSmoke(
+      baseInput(fixture, { pages: [page("home", "/")] }),
+    );
+
+    await reachConnected(fixture);
+
+    const error = await reasonOf(promise);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("devtools endpoint unavailable");
     expect(fixture.timers.pendingCount).toBe(0);
   });
 
