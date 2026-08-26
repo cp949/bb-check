@@ -29,6 +29,9 @@ interface RequestDetails {
   readonly path: string;
 }
 
+/** `Network.requestWillBeSent`가 `type`을 생략했을 때 쓰는 CDP ResourceType 값. */
+const unknownResourceType = "Other";
+
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -141,10 +144,12 @@ const deferred = <Value>(): {
 };
 
 // Runtime.evaluate 응답 껍데기를 벗겨 snapshot record를 꺼낸다.
-// CDP round-trip 자체가 실패하거나(커맨드 reject) evaluation-exception 모양
+// 응답은 도착했지만 evaluation-exception 모양
 // (예: {result:{type:"object",subtype:"error"},exceptionDetails:{...}})처럼
 // 껍데기 자체가 기대와 다르면 여기서 던진다 — 이는 페이지 콘텐츠 검증이 아니라
 // CDP가 snapshot을 아예 내주지 못한 경우이므로 finish()에서 degrade 대상이 된다.
+// 반대로 command가 reject하는 경우(연결 종료, timeout, abort)는 degrade하지 않고
+// 그대로 전파된다 — 그 상황에서는 이 page의 판정 자체를 신뢰할 수 없다.
 const unwrapSnapshotContainer = (
   value: unknown,
 ): Readonly<Record<string, unknown>> => {
@@ -262,13 +267,16 @@ export const beginPageResourceCollection = async (
 
   const trackRequest = (params: object): void => {
     const requestId = nonEmptyText(eventValue(params, "requestId"));
-    const type = nonEmptyText(eventValue(params, "type"));
+    // `type`은 protocol schema에서 optional이다. 없다고 request 추적을 포기하면
+    // 이후의 loadingFailed/responseReceived가 전부 조용히 버려지므로,
+    // CDP ResourceType의 fallback 값인 "Other"로 대신 기록한다.
+    const type =
+      nonEmptyText(eventValue(params, "type")) ?? unknownResourceType;
     const request = eventValue(params, "request");
     const path = isRecord(request)
       ? pathnameFrom(eventValue(request, "url"))
       : undefined;
-    if (requestId === undefined || type === undefined || path === undefined)
-      return;
+    if (requestId === undefined || path === undefined) return;
     requests.set(requestId, { type, path });
   };
 
@@ -281,12 +289,10 @@ export const beginPageResourceCollection = async (
     const blockedReason = optionalSignalText(
       eventValue(params, "blockedReason"),
     );
-    const canceled = eventValue(params, "canceled");
-    if (
-      errorText === undefined ||
-      blockedReason === undefined ||
-      typeof canceled !== "boolean"
-    ) {
+    // `canceled`도 optional이므로 sibling인 blockedReason과 동일하게 다룬다:
+    // 값이 없거나 boolean이 아니면 "취소 아님"으로 보고, 신호 자체를 버리지 않는다.
+    const canceled = eventValue(params, "canceled") === true;
+    if (errorText === undefined || blockedReason === undefined) {
       return;
     }
     requests.delete(requestId);
@@ -364,19 +370,22 @@ export const beginPageResourceCollection = async (
     detach();
     void Promise.resolve()
       .then(async () => {
+        // command 자체의 실패(LBS_COMMAND_TIMEOUT, LBS_ABORTED, 연결 종료 등)는
+        // 이 page를 계속 판정할 수 있다는 전제 자체가 깨졌다는 뜻이므로 degrade
+        // 대상이 아니다. try 밖에 두어 호출자에게 그대로 전파한다.
+        const evaluated = await session.command("Runtime.evaluate", {
+          expression: snapshotExpression,
+          returnByValue: true,
+        });
         let snapshot: Readonly<Record<string, unknown>>;
         try {
-          const evaluated = await session.command("Runtime.evaluate", {
-            expression: snapshotExpression,
-            returnByValue: true,
-          });
           snapshot = unwrapSnapshotContainer(evaluated);
         } catch {
           // scripts/stylesheets는 어떤 소비자도 읽지 않는 부가 데이터다(smoke.ts는
-          // failedRequests만 사용한다). CDP round-trip이 실패하거나 예기치 못한
-          // 모양으로 돌아오는 것은 페이지 콘텐츠 문제가 아니라 CDP 쪽 사정이므로,
-          // 눈에 보이지 않는 이 데이터 하나 때문에 이미 수집한 failedRequests까지
-          // 버리고 전체 페이지 run을 abort시키면 안 된다 — 빈 목록으로 degrade한다.
+          // failedRequests만 사용한다). 응답이 왔지만 snapshot 껍데기가 기대와
+          // 다른 것(evaluation exception 모양 등)은 페이지 콘텐츠 문제가 아니라
+          // CDP 쪽 사정이므로, 눈에 보이지 않는 이 데이터 하나 때문에 이미 수집한
+          // failedRequests까지 버리면 안 된다 — 빈 목록으로 degrade한다.
           return freezeResources([], [], failedRequests);
         }
         const resources = readResourcesFromSnapshot(snapshot);

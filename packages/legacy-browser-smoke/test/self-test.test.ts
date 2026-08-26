@@ -215,8 +215,8 @@ describe("createLegacyBrowserSmoke().run", () => {
 
   it("runSmoke 오류를 감싸지 않고 그대로 전파한다", async () => {
     const failure = new LegacyBrowserSmokeError(
-      "LBS_ORIGIN_NOT_LOOPBACK",
-      "origin must be loopback",
+      "LBS_CONNECT_TIMEOUT",
+      "timed out waiting for the browser",
     );
     const smoke = createLegacyBrowserSmokeWithAdapters(consumerConfig, {
       ensureChromium: async () => executable,
@@ -225,9 +225,25 @@ describe("createLegacyBrowserSmoke().run", () => {
       },
     });
 
-    await expect(smoke.run({ origin: "http://example.com" })).rejects.toBe(
+    await expect(smoke.run({ origin: "http://127.0.0.1:3000" })).rejects.toBe(
       failure,
     );
+  });
+
+  it("잘못된 origin은 Chromium provisioning 전에 LBS_ORIGIN_NOT_LOOPBACK으로 거절한다", async () => {
+    const ensureChromium = vi.fn(async () => executable);
+    const runSmoke = vi.fn(async () => consumerReport);
+    const smoke = createLegacyBrowserSmokeWithAdapters(consumerConfig, {
+      ensureChromium,
+      runSmoke,
+    });
+
+    // origin 오타 하나로 110MB Chromium을 먼저 내려받는 일이 없어야 한다.
+    await expect(smoke.run({ origin: "http://example.com" })).rejects.toThrow(
+      expect.objectContaining({ code: "LBS_ORIGIN_NOT_LOOPBACK" }) as Error,
+    );
+    expect(ensureChromium).not.toHaveBeenCalled();
+    expect(runSmoke).not.toHaveBeenCalled();
   });
 
   it("sandbox 옵션을 RunSmokeInput.sandbox로 그대로 전달한다", async () => {

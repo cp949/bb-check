@@ -4,22 +4,31 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDirectory = resolve(import.meta.dirname, "..");
-// @cp949/legacy-browser-smoke를 이 allowlist에 추가하려면 같은 변경에서 root
-// verify:package-release에 `npm run test-packed-package -- --package
-// @cp949/legacy-browser-smoke`를 추가해야 한다(현재 publish 게이트는
-// next-webpack-baseline tarball만 검증한다).
+// 배포를 허용하는 package와 그 package를 배포하기 전에 실행할 verify script를
+// 한 테이블에서 함께 관리한다. @cp949/legacy-browser-smoke처럼 새 package를
+// 여기에 추가하려면 같은 변경에서 그 package 전용 verify script도 지정해야
+// 하고, 그 script는 최소한 해당 package의 packed tarball 검증
+// (`npm run test-packed-package -- --package <이름>`)을 포함해야 한다.
+// 현재 verify:next-release는 next-webpack-baseline tarball만 검증한다.
 const allowedPackages = new Map([
-  ["@cp949/next-webpack-baseline", "packages/next-webpack-baseline"],
+  [
+    "@cp949/next-webpack-baseline",
+    {
+      packageDirectory: "packages/next-webpack-baseline",
+      verifyScript: "verify:next-release",
+    },
+  ],
 ]);
 const defaultSelectedPackage = {
   packageName: "@cp949/next-webpack-baseline",
   packageDirectory: "packages/next-webpack-baseline",
   publishSpec: "./packages/next-webpack-baseline",
+  verifyScript: "verify:next-release",
 };
 
 export function selectPublishPackage(packageName, manifest) {
-  const packageDirectory = allowedPackages.get(packageName);
-  if (packageDirectory === undefined) {
+  const entry = allowedPackages.get(packageName);
+  if (entry === undefined) {
     throw new Error(`허용하지 않은 package입니다: ${packageName}`);
   }
   if (manifest.private === true) {
@@ -32,8 +41,9 @@ export function selectPublishPackage(packageName, manifest) {
   }
   return {
     packageName,
-    packageDirectory,
-    publishSpec: `./${packageDirectory}`,
+    packageDirectory: entry.packageDirectory,
+    publishSpec: `./${entry.packageDirectory}`,
+    verifyScript: entry.verifyScript,
   };
 }
 
@@ -190,7 +200,13 @@ export function publishPackage(
   confirmed = false,
   environment = process.env,
 ) {
-  const { packageName, publishSpec } = selectedPackage;
+  const { packageName, publishSpec, verifyScript } = selectedPackage;
+  if (typeof verifyScript !== "string" || verifyScript.length === 0) {
+    console.log(
+      `${packageName}의 release 검증 script를 알 수 없어 배포를 중단합니다.`,
+    );
+    return false;
+  }
   if (!dryRun && !confirmed) {
     console.log("실제 publish confirmation이 없어 배포를 중단합니다.");
     return false;
@@ -205,8 +221,8 @@ export function publishPackage(
     return false;
   }
 
-  console.log("\n$ npm run verify:next-release");
-  const verified = runCommand("npm", ["run", "verify:next-release"]);
+  console.log(`\n$ npm run ${verifyScript}`);
+  const verified = runCommand("npm", ["run", verifyScript]);
   if (verified.status !== 0) {
     console.log("\nrelease 전체 검증에 실패해 배포를 중단합니다.");
     return false;
@@ -270,13 +286,13 @@ async function main() {
   if (!options.dryRun && !hasReleasePatterns(process.env)) {
     throw new Error("실제 publish에는 BB_CHECK_FORBIDDEN_WORDS가 필요합니다.");
   }
-  const packageDirectory = allowedPackages.get(options.packageName);
-  if (packageDirectory === undefined) {
+  const entry = allowedPackages.get(options.packageName);
+  if (entry === undefined) {
     throw new Error(`허용하지 않은 package입니다: ${options.packageName}`);
   }
   const manifest = JSON.parse(
     await readFile(
-      resolve(rootDirectory, packageDirectory, "package.json"),
+      resolve(rootDirectory, entry.packageDirectory, "package.json"),
       "utf8",
     ),
   );

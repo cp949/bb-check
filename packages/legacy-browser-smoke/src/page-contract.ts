@@ -46,12 +46,38 @@ export const validateLoopbackOrigin = (origin: string): string => {
 };
 
 /**
+ * ready 조건을 "이미 navigate가 커밋된 문서에서만 참"이 되도록 감싼다.
+ *
+ * 모든 page session은 `/json/new?about:blank`로 만든 살아 있는 about:blank
+ * 문서에서 시작하고, CDP `Page.navigate`는 navigation의 "시작"만 알린다. 이
+ * gate가 없으면 `document.readyState === "complete"`나 `body` selector처럼
+ * about:blank에서도 참인 조건이 첫 poll에서 즉시 충족되어, 대상 page를 한 번도
+ * 보지 않은 채 pass가 나올 수 있다.
+ *
+ * gate는 식이 아니라 **program**으로 만든다. `Runtime.evaluate`는 소스를
+ * program으로 실행하고 completion value를 돌려주므로, gate 이전의
+ * `ReadyCondition.expression`은 세미콜론으로 끝나는 식이나 `var` 선언이 섞인
+ * 여러 statement도 유효한 입력이었다. `return (...)` 같은 식 자리에 끼워 넣으면
+ * 그런 공개 입력이 영구 `SyntaxError`가 되어 ready가 영원히 false가 된다.
+ * `if`/`else` 블록은 그 completion value 전파를 그대로 유지한다.
+ *
+ * Chromium 75(V8 7.5)에서 그대로 실행되어야 하므로 ES5 구문만 쓴다. 닫는
+ * 중괄호 앞의 개행은 사용자 식이 줄 주석으로 끝나도 gate가 깨지지 않게 한다.
+ */
+const guardedByNavigation = (expression: string): string =>
+  `if (location.href === "about:blank") { false } else { ${expression}\n}`;
+
+/**
  * `ReadyCondition`을 CDP `Runtime.evaluate`에 넘길 JS 식 문자열로 컴파일한다.
+ * 결과는 항상 navigation gate로 감싸여 있어, navigate 이전 about:blank 문서에서는
+ * 사용자 조건이 참이어도 ready가 되지 않는다.
  */
 export const readyExpression = (ready: ReadyCondition): string =>
-  ready.kind === "selector"
-    ? `document.querySelector(${JSON.stringify(ready.selector)}) !== null`
-    : ready.expression;
+  guardedByNavigation(
+    ready.kind === "selector"
+      ? `document.querySelector(${JSON.stringify(ready.selector)}) !== null`
+      : ready.expression,
+  );
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -71,6 +97,27 @@ export const isReadyResult = (evaluateResult: unknown): boolean => {
     return Boolean(result.value);
   } catch {
     return false;
+  }
+};
+
+/**
+ * 원본 CDP `Page.navigate` 응답 하나를 navigation 실패 여부로 해석한다.
+ * CDP는 `net::ERR_CONNECTION_REFUSED` 같은 실패를 protocol error가 아니라
+ * 결과의 `errorText`로 돌려주므로 이 필드를 읽지 않으면 실패한 navigation이
+ * 성공처럼 보인다. 형식이 어긋나도 절대 throw하지 않고, 실패로 단정할 수 있는
+ * 경우에만 정리된 errorText를 돌려준다.
+ */
+export const navigateErrorText = (
+  navigateResult: unknown,
+): string | undefined => {
+  try {
+    if (!isRecord(navigateResult)) return undefined;
+    const errorText = navigateResult.errorText;
+    if (typeof errorText !== "string") return undefined;
+    const trimmed = errorText.trim();
+    return trimmed === "" ? undefined : trimmed;
+  } catch {
+    return undefined;
   }
 };
 

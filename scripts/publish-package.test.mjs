@@ -283,6 +283,73 @@ test("배포 전에 next package 전용 release 검증을 실행한다", () => {
   );
 });
 
+test("선택한 package는 자신의 verify script를 함께 돌려준다", () => {
+  assert.deepEqual(
+    selectPublishPackage("@cp949/next-webpack-baseline", {
+      name: "@cp949/next-webpack-baseline",
+    }),
+    {
+      packageName: "@cp949/next-webpack-baseline",
+      packageDirectory: "packages/next-webpack-baseline",
+      publishSpec: "./packages/next-webpack-baseline",
+      verifyScript: "verify:next-release",
+    },
+  );
+});
+
+test("release 검증 script는 하드코딩이 아니라 선택된 package에서 온다", () => {
+  const commands = [];
+  const succeeded = publishPackage(
+    "0.1.0",
+    true,
+    { status: "missing" },
+    (command, args) => {
+      commands.push([command, args]);
+      return { status: 0 };
+    },
+    {
+      packageName: "@cp949/other-package",
+      publishSpec: "./packages/other-package",
+      verifyScript: "verify:other-release",
+    },
+  );
+
+  assert.equal(succeeded, true);
+  assert.deepEqual(commands, [
+    ["npm", ["run", "verify:other-release"]],
+    [
+      "npm",
+      [
+        "publish",
+        "./packages/other-package",
+        "--access",
+        "public",
+        "--dry-run",
+      ],
+    ],
+  ]);
+});
+
+test("verify script가 없는 package 선택은 어떤 명령도 실행하지 않는다", () => {
+  const commands = [];
+  const succeeded = publishPackage(
+    "0.1.0",
+    true,
+    { status: "missing" },
+    (command, args) => {
+      commands.push([command, args]);
+      return { status: 0 };
+    },
+    {
+      packageName: "@cp949/other-package",
+      publishSpec: "./packages/other-package",
+    },
+  );
+
+  assert.equal(succeeded, false);
+  assert.deepEqual(commands, []);
+});
+
 test("실제 배포는 npm 인증 실패 시 publish를 실행하지 않는다", () => {
   const commands = [];
   const succeeded = publishPackage(

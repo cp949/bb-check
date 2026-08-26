@@ -307,6 +307,55 @@ const createPageResponder = (
   };
 };
 
+/**
+ * 실제 문서처럼 ready 식을 평가하는 responder. `location.href`는 `state.href`가,
+ * `document.readyState`는 항상 `"complete"`가 된다 — navigate가 아직 커밋되지
+ * 않은 about:blank에서도 참이 되는 ready 조건(readyState 확인 등)을 흉내낸다.
+ * CDP `Runtime.evaluate`처럼 소스를 program으로 실행하고 completion value를
+ * 돌려주도록 직접 `eval`을 쓴다.
+ */
+const createEvaluatingPageResponder =
+  (state: { href: string }): Responder =>
+  (message) => {
+    if (message.method !== "Runtime.evaluate") return undefined;
+    const params = message.params as
+      { readonly expression?: string } | undefined;
+    const expression = params?.expression ?? "";
+    if (expression.includes("querySelectorAll")) {
+      return {
+        kind: "result",
+        value: {
+          result: { type: "object", value: defaultSnapshotValue },
+        },
+      };
+    }
+    const evaluate = Function(
+      "location",
+      "document",
+      "expression",
+      "return eval(expression);",
+    ) as (
+      location: { readonly href: string },
+      document: { readonly readyState: string },
+      expression: string,
+    ) => unknown;
+    return {
+      kind: "result",
+      value: {
+        result: {
+          type: "boolean",
+          value: Boolean(
+            evaluate(
+              { href: state.href },
+              { readyState: "complete" },
+              expression,
+            ),
+          ),
+        },
+      },
+    };
+  };
+
 interface SmokeFixtureOptions {
   readonly userId?: number;
   /** page attach 순서대로, 각 page의 ready 상태를 test가 flip할 수 있는 state. */
@@ -318,6 +367,8 @@ interface SmokeFixtureOptions {
       }
     | undefined
   )[];
+  /** page socket별 responder를 직접 지정한다. 지정한 index는 pageStates를 쓰지 않는다. */
+  readonly pageResponders?: readonly Responder[];
 }
 
 const smokeFixture = (options: SmokeFixtureOptions = {}) => {
@@ -328,6 +379,7 @@ const smokeFixture = (options: SmokeFixtureOptions = {}) => {
   const timers = new FakeTimers();
   const pageStates = options.pageStates ?? [];
   const pageSnapshots = options.pageSnapshots ?? [];
+  const pageResponders = options.pageResponders ?? [];
 
   const createSocket: CdpSocketFactory = (url) => {
     const index = sockets.length;
@@ -335,13 +387,18 @@ const smokeFixture = (options: SmokeFixtureOptions = {}) => {
     if (index === 0) {
       socket.responder = ackEverything;
     } else {
-      const state = pageStates[index - 1];
-      if (state === undefined) {
-        throw new Error(
-          `smokeFixture: no pageStates entry for page socket ${String(index)}`,
-        );
+      const responder = pageResponders[index - 1];
+      if (responder !== undefined) {
+        socket.responder = responder;
+      } else {
+        const state = pageStates[index - 1];
+        if (state === undefined) {
+          throw new Error(
+            `smokeFixture: no pageStates entry for page socket ${String(index)}`,
+          );
+        }
+        socket.responder = createPageResponder(state, pageSnapshots[index - 1]);
       }
-      socket.responder = createPageResponder(state, pageSnapshots[index - 1]);
     }
     sockets.push(socket);
     queueMicrotask(() => {
@@ -528,6 +585,108 @@ describe("runSmoke", () => {
 
     expect(report.status).toBe("pass");
     expect(report.pages[0]?.status).toBe("pass");
+  });
+
+  it("navigate가 커밋되기 전 about:blank에서 참이 되는 ready 조건은 ready로 판정하지 않는다", async () => {
+    // attachPageSession은 항상 about:blank target을 만들고, Page.navigate는
+    // navigation의 "시작"만 알린다. 그 사이에 평가되는 ready 조건은 아직
+    // 대상 문서를 본 적이 없으므로 참이어도 ready여선 안 된다.
+    const location = { href: "about:blank" };
+    const fixture = smokeFixture({
+      pageResponders: [createEvaluatingPageResponder(location)],
+    });
+
+    let outcome: "pending" | "settled" = "pending";
+    const promise = runSmoke(
+      baseInput(fixture, {
+        pages: [
+          page("home", "/", {
+            kind: "expression",
+            expression: 'document.readyState === "complete"',
+          }),
+        ],
+      }),
+    ).then(
+      (report) => {
+        outcome = "settled";
+        return report;
+      },
+      (error: unknown) => {
+        outcome = "settled";
+        throw error;
+      },
+    );
+
+    await reachConnected(fixture);
+    await attachNextPageSocket(fixture, 1);
+    await waitUntil(() => fixture.log.includes("socket2:send:Page.navigate"));
+
+    // about:blank에 머무는 동안에는 몇 번을 poll해도 page가 완료되지 않는다.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await waitUntil(
+        () => fixture.timers.pendingAt(10) >= 1 || outcome === "settled",
+      );
+      expect(outcome).toBe("pending");
+      expect(fixture.timers.fire(10)).toBe(1);
+    }
+
+    // navigate가 커밋되어 실제 문서 URL이 된 뒤에야 ready로 판정된다.
+    await waitUntil(() => fixture.timers.pendingAt(10) >= 1);
+    location.href = "http://127.0.0.1/";
+    fixture.timers.fire(10);
+
+    const report = await promise;
+
+    expect(report.status).toBe("pass");
+    expect(report.pages[0]?.status).toBe("pass");
+    expect(fixture.timers.pendingCount).toBe(0);
+  });
+
+  it("Page.navigate가 errorText를 돌려주면 ready-poll을 시작하지 않고 즉시 실패한다", async () => {
+    const fixture = smokeFixture({
+      pageResponders: [
+        (message) => {
+          if (message.method === "Page.navigate") {
+            return {
+              kind: "result",
+              value: {
+                frameId: "FRAME1",
+                loaderId: "LOADER1",
+                errorText: "net::ERR_CONNECTION_REFUSED",
+              },
+            };
+          }
+          // navigate 실패를 무시하고 poll이 시작되면 곧바로 ready가 되는 상황을
+          // 만들어, 실패가 조용한 pass로 바뀌지 않는지 본다.
+          if (message.method !== "Runtime.evaluate") return undefined;
+          return {
+            kind: "result",
+            value: { result: { type: "boolean", value: true } },
+          };
+        },
+      ],
+    });
+
+    const promise = runSmoke(
+      baseInput(fixture, { pages: [page("home", "/")] }),
+    );
+
+    await reachConnected(fixture);
+    await attachNextPageSocket(fixture, 1);
+
+    const error = await reasonOf(promise);
+
+    expect(error).toBeInstanceOf(LegacyBrowserSmokeError);
+    expect((error as LegacyBrowserSmokeError).code).toBe("LBS_PAGE_NOT_READY");
+    expect((error as LegacyBrowserSmokeError).message).toContain(
+      "net::ERR_CONNECTION_REFUSED",
+    );
+    expect((error as LegacyBrowserSmokeError).cause).toBe(
+      "net::ERR_CONNECTION_REFUSED",
+    );
+    expect(fixture.log).not.toContain("socket2:send:Runtime.evaluate");
+    expect(fixture.log).toContain("socket2:send:Page.close");
+    expect(fixture.timers.pendingCount).toBe(0);
   });
 
   it("ready 조건이 timeoutMs 안에 충족되지 않으면 LBS_PAGE_NOT_READY로 전체 호출이 거부되고 page session도 close된다", async () => {

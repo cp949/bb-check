@@ -6,6 +6,7 @@ import {
   type ReadyCondition,
   type SmokePage,
 } from "./config.js";
+import { validateLoopbackOrigin } from "./page-contract.js";
 import type { ChromiumExecutable, EnsureChromiumOptions } from "./preflight.js";
 import type { SandboxDisabledOption, SandboxOption } from "./runtime.js";
 import {
@@ -244,6 +245,11 @@ export const createLegacyBrowserSmokeWithAdapters = (
       readonly executablePath?: string;
       readonly sandbox?: SandboxOption | SandboxDisabledOption;
     }): Promise<SmokeReport> => {
+      // origin은 Chromium을 확보하기 전에 검증한다. 오타 하나로 110MB
+      // provisioning을 끝낸 뒤에야 LBS_ORIGIN_NOT_LOOPBACK을 만나면 안 된다.
+      // runSmoke가 같은 검증을 다시 하고 정규화까지 하므로(멱등) 여기서는
+      // 검증만 하고 원래 origin을 그대로 넘긴다.
+      validateLoopbackOrigin(options.origin);
       const executable = await resolveExecutable(options.executablePath);
       return adapters.runSmoke({
         origin: options.origin,

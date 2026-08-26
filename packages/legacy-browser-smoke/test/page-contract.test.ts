@@ -4,6 +4,7 @@ import { LegacyBrowserSmokeError } from "../src/errors.js";
 import {
   isReadyResult,
   matchKnownUnsupported,
+  navigateErrorText,
   readyExpression,
   validateLoopbackOrigin,
 } from "../src/page-contract.js";
@@ -65,8 +66,42 @@ describe("validateLoopbackOrigin", () => {
 });
 
 describe("readyExpression", () => {
+  /**
+   * 컴파일된 식을 주입한 location/document/window 위에서 평가한다. CDP
+   * `Runtime.evaluate`는 넘겨받은 소스를 program으로 실행하고 completion value를
+   * 돌려주므로, 이 harness도 같은 방식(직접 `eval`)으로 평가해야 실제 semantics를
+   * 재현한다 — `return (...)`로 감싸면 단일 식만 받는 다른 계약이 되어버린다.
+   */
+  const evaluate = (
+    expression: string,
+    location: { readonly href: string },
+    documentDouble: object,
+    windowDouble: object = {},
+  ): unknown =>
+    (
+      Function(
+        "location",
+        "document",
+        "window",
+        "expression",
+        "return eval(expression);",
+      ) as (
+        location: { readonly href: string },
+        document: object,
+        window: object,
+        expression: string,
+      ) => unknown
+    )(location, documentDouble, windowDouble, expression);
+
+  const matchingDocument = {
+    readyState: "complete",
+    querySelector: () => ({}),
+  };
+  const blank = { href: "about:blank" };
+  const navigated = { href: "http://127.0.0.1:3000/" };
+
   it("selector 조건을 JSON 이스케이프된 querySelector 식으로 컴파일한다", () => {
-    expect(readyExpression({ kind: "selector", selector: "#app" })).toBe(
+    expect(readyExpression({ kind: "selector", selector: "#app" })).toContain(
       'document.querySelector("#app") !== null',
     );
   });
@@ -74,20 +109,106 @@ describe("readyExpression", () => {
   it("selector 안의 큰따옴표와 백슬래시도 안전하게 이스케이프한다", () => {
     const selector = 'div[data-x="y\\z"]';
     const expression = readyExpression({ kind: "selector", selector });
-    expect(expression).toBe(
+    expect(expression).toContain(
       `document.querySelector(${JSON.stringify(selector)}) !== null`,
     );
     expect(expression).toContain('\\"');
   });
 
-  it("expression 조건은 그대로 반환한다", () => {
+  it("컴파일 결과는 navigation gate로 감싼 program 전체와 정확히 일치한다", () => {
+    // toContain만으로는 gate 본문의 오타(about_blank 등)나 이중 wrapping을
+    // 잡지 못하므로 전체 문자열을 그대로 고정한다.
     expect(
       readyExpression({
         kind: "expression",
         expression: "window.__ready === true",
       }),
-    ).toBe("window.__ready === true");
+    ).toBe(
+      'if (location.href === "about:blank") { false } else { window.__ready === true\n}',
+    );
+    expect(readyExpression({ kind: "selector", selector: "#app" })).toBe(
+      'if (location.href === "about:blank") { false } else { document.querySelector("#app") !== null\n}',
+    );
   });
+
+  it("navigate가 커밋된 문서에서는 selector 조건 결과를 그대로 반영한다", () => {
+    expect(
+      evaluate(
+        readyExpression({ kind: "selector", selector: "body" }),
+        navigated,
+        matchingDocument,
+      ),
+    ).toBe(true);
+    expect(
+      evaluate(
+        readyExpression({ kind: "selector", selector: "#app" }),
+        navigated,
+        {
+          readyState: "complete",
+          querySelector: () => null,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("about:blank 문서에서는 selector 조건이 참이어도 false로 평가된다", () => {
+    expect(
+      evaluate(
+        readyExpression({ kind: "selector", selector: "body" }),
+        blank,
+        matchingDocument,
+      ),
+    ).toBe(false);
+  });
+
+  /**
+   * `ReadyCondition.expression`은 공개 입력이고, gate가 생기기 전에는
+   * `Runtime.evaluate`에 그대로 전달되어 program semantics로 실행됐다. 단일 식뿐
+   * 아니라 세미콜론으로 끝나는 식, 여러 statement, 줄 주석으로 끝나는 식도 모두
+   * 유효한 입력이므로 gate가 그 계약을 좁히면 안 된다.
+   */
+  const programForms: readonly {
+    readonly label: string;
+    readonly expression: string;
+  }[] = [
+    { label: "단일 식", expression: "window.__ready === true" },
+    { label: "세미콜론으로 끝나는 식", expression: "window.__ready === true;" },
+    {
+      label: "var 선언이 있는 여러 statement",
+      expression: "var ok = window.__ready; ok === true",
+    },
+    {
+      label: "줄 주석으로 끝나는 식",
+      expression: "window.__ready === true // 준비 확인",
+    },
+  ];
+
+  it.each(programForms)(
+    "$label도 커밋된 문서에서 원래 program semantics대로 평가된다",
+    ({ expression }) => {
+      const compiled = readyExpression({ kind: "expression", expression });
+      expect(
+        evaluate(compiled, navigated, matchingDocument, { __ready: true }),
+      ).toBe(true);
+      expect(
+        evaluate(compiled, navigated, matchingDocument, { __ready: false }),
+      ).toBe(false);
+    },
+  );
+
+  it.each(programForms)(
+    "$label도 about:blank에서는 평가되지 않고 false가 된다",
+    ({ expression }) => {
+      expect(
+        evaluate(
+          readyExpression({ kind: "expression", expression }),
+          blank,
+          matchingDocument,
+          { __ready: true },
+        ),
+      ).toBe(false);
+    },
+  );
 });
 
 describe("isReadyResult", () => {
@@ -123,6 +244,34 @@ describe("isReadyResult", () => {
     expect(isReadyResult(42)).toBe(false);
     expect(isReadyResult({ result: {} })).toBe(false);
     expect(isReadyResult({ result: "not a record" })).toBe(false);
+  });
+});
+
+describe("navigateErrorText", () => {
+  it("errorText가 비어 있지 않은 문자열이면 정리된 값을 돌려준다", () => {
+    expect(
+      navigateErrorText({
+        frameId: "FRAME1",
+        loaderId: "LOADER1",
+        errorText: " net::ERR_CONNECTION_REFUSED ",
+      }),
+    ).toBe("net::ERR_CONNECTION_REFUSED");
+  });
+
+  it("errorText가 없는 정상 navigate 응답은 undefined다", () => {
+    expect(
+      navigateErrorText({ frameId: "FRAME1", loaderId: "LOADER1" }),
+    ).toBeUndefined();
+  });
+
+  it("형식이 잘못되거나 비어 있는 errorText는 예외 없이 undefined로 취급한다", () => {
+    expect(navigateErrorText({ errorText: "" })).toBeUndefined();
+    expect(navigateErrorText({ errorText: "   " })).toBeUndefined();
+    expect(navigateErrorText({ errorText: 42 })).toBeUndefined();
+    expect(navigateErrorText(null)).toBeUndefined();
+    expect(navigateErrorText(undefined)).toBeUndefined();
+    expect(navigateErrorText("not an object")).toBeUndefined();
+    expect(navigateErrorText([])).toBeUndefined();
   });
 });
 

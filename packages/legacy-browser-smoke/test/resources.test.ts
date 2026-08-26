@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { LegacyBrowserSmokeError } from "../src/errors.js";
 import {
   beginPageResourceCollection,
   type PageSession,
@@ -396,6 +397,92 @@ describe("beginPageResourceCollection", () => {
     expect(JSON.stringify(result.failedRequests)).not.toContain("fragment");
   });
 
+  it("type이 없는 requestWillBeSent도 추적해 실패 signal을 남긴다", async () => {
+    const session = new SessionDouble();
+    session.command = async <T>(method: string): Promise<T> => {
+      if (method === "Runtime.evaluate") {
+        return {
+          result: { type: "object", value: { scripts: [], stylesheets: [] } },
+        } as T;
+      }
+      return undefined as T;
+    };
+    const collector = await beginPageResourceCollection(session);
+    // type은 protocol schema에서 optional이다 — 없다고 request 추적 자체를
+    // 포기하면 이후의 모든 실패 신호가 조용히 사라진다.
+    session.emit("Network.requestWillBeSent", {
+      requestId: "no-type",
+      request: { url: "https://example.test/app.js" },
+    });
+    session.emit("Network.loadingFailed", {
+      requestId: "no-type",
+      errorText: "net::ERR_FAILED",
+      canceled: false,
+    });
+
+    expect((await collector.finish()).failedRequests).toEqual([
+      {
+        kind: "request-failed",
+        text: "type=Other; path=/app.js; error=net::ERR_FAILED; blocked=; canceled=false",
+      },
+    ]);
+  });
+
+  it("canceled가 없는 loadingFailed도 canceled=false로 signal을 남긴다", async () => {
+    const session = new SessionDouble();
+    session.command = async <T>(method: string): Promise<T> => {
+      if (method === "Runtime.evaluate") {
+        return {
+          result: { type: "object", value: { scripts: [], stylesheets: [] } },
+        } as T;
+      }
+      return undefined as T;
+    };
+    const collector = await beginPageResourceCollection(session);
+    session.emit("Network.requestWillBeSent", {
+      requestId: "no-canceled",
+      type: "Script",
+      request: { url: "https://example.test/app.js" },
+    });
+    // canceled도 optional이므로 sibling인 blockedReason과 동일하게 관대하게 다룬다.
+    session.emit("Network.loadingFailed", {
+      requestId: "no-canceled",
+      errorText: "net::ERR_FAILED",
+    });
+
+    expect((await collector.finish()).failedRequests).toEqual([
+      {
+        kind: "request-failed",
+        text: "type=Script; path=/app.js; error=net::ERR_FAILED; blocked=; canceled=false",
+      },
+    ]);
+  });
+
+  it("type이 없는 request의 HTTP 오류도 placeholder type으로 보존한다", async () => {
+    const session = new SessionDouble();
+    session.command = async <T>(method: string): Promise<T> => {
+      if (method === "Runtime.evaluate") {
+        return {
+          result: { type: "object", value: { scripts: [], stylesheets: [] } },
+        } as T;
+      }
+      return undefined as T;
+    };
+    const collector = await beginPageResourceCollection(session);
+    session.emit("Network.requestWillBeSent", {
+      requestId: "http-404",
+      request: { url: "https://example.test/gone" },
+    });
+    session.emit("Network.responseReceived", {
+      requestId: "http-404",
+      response: { status: 404 },
+    });
+
+    expect((await collector.finish()).failedRequests).toEqual([
+      { kind: "http-error", text: "status=404; type=Other; path=/gone" },
+    ]);
+  });
+
   it("2xx/3xx response request는 loadingFinished에서만 정리되어 이후 stale terminal을 무시한다", async () => {
     const session = new SessionDouble();
     session.command = async <T>(method: string): Promise<T> => {
@@ -530,9 +617,11 @@ describe("beginPageResourceCollection", () => {
     expect(text).not.toContain("hash");
   });
 
-  it("DOM snapshot 실패는 listener를 해제한 채 빈 목록으로 degrade한다", async () => {
+  it("연결이 끊긴 채로 Runtime.evaluate가 실패하면 degrade하지 않고 오류를 전파한다", async () => {
     const session = new SessionDouble();
-    const failure = new Error("evaluate failed");
+    // cdp.ts는 연결 종료를 일반 Error로 알린다. 이 오류를 degrade로 삼키면
+    // browser가 죽은 뒤의 page가 신호 0건 → pass로 보고된다.
+    const failure = new Error("CDP connection closed (code=1006)");
     session.command = async (method: string): Promise<never> => {
       session.commands.push({ method });
       if (method === "Runtime.evaluate") return Promise.reject(failure);
@@ -550,22 +639,31 @@ describe("beginPageResourceCollection", () => {
       canceled: false,
     });
 
-    const result = await collector.finish();
+    await expect(collector.finish()).rejects.toBe(failure);
 
-    expect(result).toEqual({
-      scripts: [],
-      stylesheets: [],
-      failedRequests: [
-        {
-          kind: "request-failed",
-          text: "type=Script; path=/app.js; error=net::ERR_FAILED; blocked=; canceled=false",
-        },
-      ],
-    });
-    expect(Object.isFrozen(result)).toBe(true);
-    expect(Object.isFrozen(result.scripts)).toBe(true);
-    expect(Object.isFrozen(result.stylesheets)).toBe(true);
-    expect(Object.isFrozen(result.failedRequests)).toBe(true);
+    expect(session.listenerCount()).toBe(0);
+    collector.dispose();
+    expect(session.commands.map((command) => command.method)).toEqual([
+      "Network.enable",
+      "Runtime.evaluate",
+    ]);
+  });
+
+  it("Runtime.evaluate가 LBS_COMMAND_TIMEOUT으로 실패해도 degrade하지 않는다", async () => {
+    const session = new SessionDouble();
+    const failure = new LegacyBrowserSmokeError(
+      "LBS_COMMAND_TIMEOUT",
+      "CDP command Runtime.evaluate timed out after 30000ms",
+    );
+    session.command = async (method: string): Promise<never> => {
+      session.commands.push({ method });
+      if (method === "Runtime.evaluate") return Promise.reject(failure);
+      return undefined as never;
+    };
+    const collector = await beginPageResourceCollection(session);
+
+    await expect(collector.finish()).rejects.toBe(failure);
+
     expect(session.listenerCount()).toBe(0);
     collector.dispose();
     expect(session.commands.map((command) => command.method)).toEqual([

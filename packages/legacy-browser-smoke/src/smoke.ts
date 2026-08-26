@@ -8,6 +8,7 @@ import { LegacyBrowserSmokeError } from "./errors.js";
 import {
   isReadyResult,
   matchKnownUnsupported,
+  navigateErrorText,
   readyExpression,
   validateLoopbackOrigin,
 } from "./page-contract.js";
@@ -220,9 +221,21 @@ const runPage = async (
       ignoreMalformedEvent(createExceptionListener(consoleSignals)),
     );
 
-    await pageHandle.session.command("Page.navigate", {
-      url: `${canonicalOrigin}${page.path}`,
+    const url = `${canonicalOrigin}${page.path}`;
+    const navigated = await pageHandle.session.command("Page.navigate", {
+      url,
     });
+    // CDP는 navigation 실패(net::ERR_CONNECTION_REFUSED 등)를 protocol error가
+    // 아니라 결과의 errorText로 알린다. 이 경우 대상 문서는 존재하지 않으므로
+    // ready-poll을 시작하지 않고 곧바로 실패로 끝낸다.
+    const navigateFailure = navigateErrorText(navigated);
+    if (navigateFailure !== undefined) {
+      throw new LegacyBrowserSmokeError(
+        "LBS_PAGE_NOT_READY",
+        `page "${page.name}" navigation to ${url} failed: ${navigateFailure}`,
+        { cause: navigateFailure },
+      );
+    }
 
     await waitForReady(
       pageHandle.session,
