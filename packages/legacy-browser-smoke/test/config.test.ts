@@ -269,4 +269,54 @@ describe("defineSmokeConfig", () => {
     expect(normalized.knownUnsupported).toEqual([]);
     expect(Object.isFrozen(normalized.knownUnsupported)).toBe(true);
   });
+
+  it("expectedPath는 path와 같은 규칙으로 검증되고 정규화 결과에 보존된다", () => {
+    const config = defineSmokeConfig({
+      pages: [
+        {
+          name: "my-info",
+          path: "/mypage/my-info",
+          expectedPath: "/mypage/my-info",
+          ready: { kind: "selector", selector: "#app" },
+        },
+      ],
+      timeoutMs: 1_000,
+    });
+
+    expect(config.pages[0]?.expectedPath).toBe("/mypage/my-info");
+  });
+
+  it("expectedPath를 생략하면 정규화된 page에 key 자체가 없다", () => {
+    const config = defineSmokeConfig({
+      pages: [
+        { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+      ],
+      timeoutMs: 1_000,
+    });
+
+    expect(Object.hasOwn(config.pages[0] ?? {}, "expectedPath")).toBe(false);
+  });
+
+  it.each([
+    ["슬래시로 시작하지 않음", "mypage"],
+    ["이중 슬래시 시작", "//evil"],
+    ["backslash 포함", "/my\\page"],
+    ["제어문자 포함", "/my\npage"],
+  ])("expectedPath가 %s이면 LBS_CONFIG_INVALID다", (_label, expectedPath) => {
+    expect(() =>
+      defineSmokeConfig({
+        pages: [
+          {
+            name: "home",
+            path: "/",
+            expectedPath: expectedPath as `/${string}`,
+            ready: { kind: "selector", selector: "#app" },
+          },
+        ],
+        timeoutMs: 1_000,
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: "LBS_CONFIG_INVALID" }) as Error,
+    );
+  });
 });

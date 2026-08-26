@@ -11,6 +11,7 @@ export interface SmokePage {
   readonly name: string;
   readonly path: `/${string}`;
   readonly ready: ReadyCondition;
+  readonly expectedPath?: `/${string}`;
 }
 
 export type ReadyCondition =
@@ -166,22 +167,33 @@ const hasControlCharacter = (value: string): boolean => {
   return false;
 };
 
-const normalizePage = (value: unknown): SmokePage => {
-  const page = ownData(value, ["name", "path", "ready"]);
-  const path = page.path;
+/** `path`·`expectedPath`·`sourcePath`가 공유하는 origin-relative 경로 검증. */
+const normalizePath = (value: unknown): `/${string}` => {
   if (
-    typeof path !== "string" ||
-    !path.startsWith("/") ||
-    path.startsWith("//") ||
-    path.includes("\\") ||
-    hasControlCharacter(path)
+    typeof value !== "string" ||
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("\\") ||
+    hasControlCharacter(value)
   ) {
-    configInvalid();
+    return configInvalid();
   }
+  return value as `/${string}`;
+};
+
+const normalizePage = (value: unknown): SmokePage => {
+  const page = ownData(
+    value,
+    ["name", "path", "ready", "expectedPath"],
+    ["name", "path", "ready"],
+  );
+  const expectedPath =
+    page.expectedPath === undefined ? undefined : normalizePath(page.expectedPath);
   return Object.freeze({
     name: nonEmptyText(page.name),
-    path: path as `/${string}`,
+    path: normalizePath(page.path),
     ready: normalizeReady(page.ready),
+    ...(expectedPath === undefined ? {} : { expectedPath }),
   });
 };
 
