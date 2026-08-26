@@ -1,4 +1,9 @@
-import { nodeTimers, type TimerAdapter } from "./cdp.js";
+import {
+  nodeTimers,
+  startDeadline,
+  type DeadlineSignal,
+  type TimerAdapter,
+} from "./cdp.js";
 import type {
   KnownUnsupportedSignal,
   ReadyCondition,
@@ -122,12 +127,13 @@ const createExceptionListener =
 
 /**
  * ready 조건이 충족될 때까지 `Runtime.evaluate`를 poll한다. 즉시 한 번 poll하고
- * 이후 `readyPollIntervalMs`마다 poll하며, `timeoutMs`가 지나면
+ * 이후 `readyPollIntervalMs`마다 poll하며, `deadline`이 만료되면
  * `LBS_PAGE_NOT_READY`로 reject한다. 두 경로 모두 예약된 timer를 남기지 않는다.
  */
 const waitForReady = (
   session: RawSession,
   ready: ReadyCondition,
+  deadline: DeadlineSignal,
   timeoutMs: number,
   timers: TimerAdapter,
   readyPollIntervalMs: number,
@@ -139,14 +145,15 @@ const waitForReady = (
     let settled = false;
     let lastOutcome: unknown;
     let cancelPollTimer: (() => void) | undefined;
+    // 이미 만료된 deadline은 onExpire가 동기 실행되어 등록(재할당) 이전에
+    // finish가 호출될 수 있다. no-op으로 초기화해 그 경우에도 안전하게 호출한다.
+    let cancelDeadlineListener: () => void = () => {};
 
     const finish = (settle: () => void): void => {
       if (settled) return;
       settled = true;
       cancelPollTimer?.();
-      // deadline timer는 아래에서 const로 한 번만 선언된다. finish는 그 선언이
-      // 끝난 뒤(tick/deadline timer 콜백에서)에만 호출되므로 closure로 안전하다.
-      cancelDeadlineTimer();
+      cancelDeadlineListener();
       settle();
     };
 
@@ -178,7 +185,7 @@ const waitForReady = (
       scheduleNextTick();
     };
 
-    const cancelDeadlineTimer = timers.schedule(() => {
+    cancelDeadlineListener = deadline.onExpire(() => {
       finish(() => {
         reject(
           new LegacyBrowserSmokeError(
@@ -188,7 +195,7 @@ const waitForReady = (
           ),
         );
       });
-    }, timeoutMs);
+    });
 
     void tick();
   });
@@ -204,6 +211,7 @@ const runPage = async (
   readyPollIntervalMs: number,
   knownUnsupported: readonly KnownUnsupportedSignal[],
 ): Promise<SmokePageResult> => {
+  const deadline = startDeadline(timers, timeoutMs);
   const pageHandle = await attachPageSession(browserSession);
   let resourceCollector: PageResourceCollector | undefined;
   const consoleSignals: PageSignal[] = [];
@@ -240,6 +248,7 @@ const runPage = async (
     await waitForReady(
       pageHandle.session,
       page.ready,
+      deadline,
       timeoutMs,
       timers,
       readyPollIntervalMs,
@@ -266,6 +275,7 @@ const runPage = async (
       missingKnownUnsupported,
     };
   } finally {
+    deadline.cancel();
     resourceCollector?.dispose();
     unsubscribeConsole?.();
     unsubscribeException?.();
