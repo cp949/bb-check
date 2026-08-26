@@ -1,9 +1,45 @@
 import { describe, expect, it } from "vitest";
+import { startDeadline, type TimerAdapter } from "../src/cdp.js";
 import { LegacyBrowserSmokeError } from "../src/errors.js";
 import {
   beginPageResourceCollection,
   type PageSession,
 } from "../src/resources.js";
+
+interface PendingTimer {
+  readonly id: number;
+  readonly delayMs: number;
+  readonly callback: () => void;
+}
+
+/** 실제 timer 없이 예약/취소를 관찰하고 원하는 시점에 발화시키는 test double. */
+class FakeTimers implements TimerAdapter {
+  private nextId = 0;
+  private readonly timers = new Map<number, PendingTimer>();
+
+  schedule(callback: () => void, delayMs: number): () => void {
+    const id = (this.nextId += 1);
+    this.timers.set(id, { id, delayMs, callback });
+    return (): void => {
+      this.timers.delete(id);
+    };
+  }
+
+  get pendingCount(): number {
+    return this.timers.size;
+  }
+
+  fire(delayMs: number): number {
+    const due = [...this.timers.values()].filter(
+      (timer) => timer.delayMs === delayMs,
+    );
+    for (const timer of due) {
+      this.timers.delete(timer.id);
+      timer.callback();
+    }
+    return due.length;
+  }
+}
 
 type Listener = (params: object) => void;
 
@@ -165,6 +201,7 @@ describe("beginPageResourceCollection", () => {
           text: "type=Script; path=/app.js; error=net::ERR_FAILED; blocked=inspector; canceled=false",
         },
       ],
+      pendingScripts: [],
     });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.scripts)).toBe(true);
@@ -321,6 +358,7 @@ describe("beginPageResourceCollection", () => {
         { href: null, text: ".speedy { display: block; }" },
       ],
       failedRequests: [],
+      pendingScripts: [],
     });
     expect(Object.isFrozen(result.stylesheets[0])).toBe(true);
   });
@@ -707,6 +745,7 @@ describe("beginPageResourceCollection", () => {
           text: "type=Script; path=/app.js; error=net::ERR_FAILED; blocked=; canceled=false",
         },
       ],
+      pendingScripts: [],
     });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.scripts)).toBe(true);
@@ -785,6 +824,140 @@ describe("beginPageResourceCollection", () => {
         { href: null, text: "ignored" },
       ],
       failedRequests: [],
+      pendingScripts: [],
     });
+  });
+});
+
+describe("waitForScriptSettle과 pendingScripts", () => {
+  const scriptRequest = (requestId: string, path: string): object => ({
+    requestId,
+    type: "Script",
+    request: { url: `http://127.0.0.1${path}` },
+  });
+
+  it("추적 중인 Script 요청이 없으면 즉시 resolve한다", async () => {
+    const session = new SessionDouble();
+    const timers = new FakeTimers();
+    const collector = await beginPageResourceCollection(session);
+
+    await collector.waitForScriptSettle(startDeadline(timers, 500));
+
+    collector.dispose();
+  });
+
+  it("모든 Script 요청이 terminal이 되는 순간 resolve하고 pendingScripts는 비어 있다", async () => {
+    const session = new SessionDouble();
+    const timers = new FakeTimers();
+    const collector = await beginPageResourceCollection(session);
+    session.emit("Network.requestWillBeSent", scriptRequest("s1", "/a.js"));
+    session.emit("Network.requestWillBeSent", scriptRequest("s2", "/b.js"));
+
+    let settled = false;
+    const waiting = collector
+      .waitForScriptSettle(startDeadline(timers, 500))
+      .then(() => {
+        settled = true;
+      });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    session.emit("Network.loadingFinished", { requestId: "s1" });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    session.emit("Network.loadingFailed", {
+      requestId: "s2",
+      errorText: "net::ERR_FAILED",
+    });
+    await waiting;
+
+    const resources = await collector.finish();
+    expect(resources.pendingScripts).toEqual([]);
+  });
+
+  it("status 400 이상 응답도 Script terminal로 취급하며 기존 http-error 신호는 유지된다", async () => {
+    const session = new SessionDouble();
+    const timers = new FakeTimers();
+    const collector = await beginPageResourceCollection(session);
+    session.emit("Network.requestWillBeSent", scriptRequest("s1", "/a.js"));
+    session.emit("Network.responseReceived", {
+      requestId: "s1",
+      response: { status: 404 },
+    });
+
+    await collector.waitForScriptSettle(startDeadline(timers, 500));
+    const resources = await collector.finish();
+
+    expect(resources.pendingScripts).toEqual([]);
+    expect(resources.failedRequests).toEqual([
+      { kind: "http-error", text: "status=404; type=Script; path=/a.js" },
+    ]);
+  });
+
+  it("deadline이 만료되면 resolve하고 미완료 Script는 finish에서 script-pending 신호가 된다", async () => {
+    const session = new SessionDouble();
+    const timers = new FakeTimers();
+    const collector = await beginPageResourceCollection(session);
+    session.emit("Network.requestWillBeSent", scriptRequest("s1", "/slow.js"));
+
+    const deadline = startDeadline(timers, 500);
+    const waiting = collector.waitForScriptSettle(deadline);
+    timers.fire(500);
+    await waiting;
+
+    const resources = await collector.finish();
+    expect(resources.pendingScripts).toEqual([
+      { kind: "script-pending", text: "path=/slow.js" },
+    ]);
+  });
+
+  it("Script가 아닌 요청은 settle 대기와 pendingScripts에 영향을 주지 않는다", async () => {
+    const session = new SessionDouble();
+    const timers = new FakeTimers();
+    const collector = await beginPageResourceCollection(session);
+    session.emit("Network.requestWillBeSent", {
+      requestId: "img1",
+      type: "Image",
+      request: { url: "http://127.0.0.1/img.png" },
+    });
+
+    await collector.waitForScriptSettle(startDeadline(timers, 500));
+    const resources = await collector.finish();
+
+    expect(resources.pendingScripts).toEqual([]);
+  });
+
+  it("settle 대기 중 시작된 Script 요청도 완료될 때까지 함께 기다린다", async () => {
+    const session = new SessionDouble();
+    const timers = new FakeTimers();
+    const collector = await beginPageResourceCollection(session);
+    session.emit("Network.requestWillBeSent", scriptRequest("s1", "/a.js"));
+
+    let settled = false;
+    const waiting = collector
+      .waitForScriptSettle(startDeadline(timers, 500))
+      .then(() => {
+        settled = true;
+      });
+    session.emit("Network.requestWillBeSent", scriptRequest("s2", "/late.js"));
+    session.emit("Network.loadingFinished", { requestId: "s1" });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    session.emit("Network.loadingFinished", { requestId: "s2" });
+    await waiting;
+    collector.dispose();
+  });
+
+  it("dispose는 대기 중인 settle waiter를 resolve해 영원히 매달리지 않게 한다", async () => {
+    const session = new SessionDouble();
+    const timers = new FakeTimers();
+    const collector = await beginPageResourceCollection(session);
+    session.emit("Network.requestWillBeSent", scriptRequest("s1", "/a.js"));
+
+    const waiting = collector.waitForScriptSettle(startDeadline(timers, 500));
+    collector.dispose();
+    await waiting;
   });
 });

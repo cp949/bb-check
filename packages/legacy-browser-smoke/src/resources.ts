@@ -1,3 +1,4 @@
+import type { DeadlineSignal } from "./cdp.js";
 import type { PageSession } from "./page-session.js";
 import { normalizeSignalText } from "./signal.js";
 
@@ -19,11 +20,13 @@ export interface PageResources {
   readonly scripts: readonly string[];
   readonly stylesheets: readonly StylesheetSource[];
   readonly failedRequests: readonly PageSignal[];
+  readonly pendingScripts: readonly PageSignal[];
 }
 
 export interface PageResourceCollector {
   finish(): Promise<PageResources>;
   dispose(): void;
+  waitForScriptSettle(deadline: DeadlineSignal): Promise<void>;
 }
 
 interface RequestDetails {
@@ -120,6 +123,7 @@ const freezeResources = (
   scripts: readonly string[],
   stylesheets: readonly StylesheetSource[],
   failedRequests: readonly PageSignal[],
+  pendingScripts: readonly PageSignal[],
 ): PageResources =>
   Object.freeze({
     scripts: Object.freeze([...scripts]),
@@ -128,6 +132,9 @@ const freezeResources = (
     ),
     failedRequests: Object.freeze(
       failedRequests.map((signal) => Object.freeze({ ...signal })),
+    ),
+    pendingScripts: Object.freeze(
+      pendingScripts.map((signal) => Object.freeze({ ...signal })),
     ),
   });
 
@@ -230,7 +237,7 @@ const readResourcesFromSnapshot = (
     }
     throw new TypeError("invalid stylesheet resource");
   }
-  return freezeResources(scripts, stylesheets, []);
+  return freezeResources(scripts, stylesheets, [], []);
 };
 
 const snapshotExpression =
@@ -251,6 +258,33 @@ export const beginPageResourceCollection = async (
 ): Promise<PageResourceCollector> => {
   const requests = new Map<string, RequestDetails>();
   const failedRequests: PageSignal[] = [];
+  const scriptRequests = new Map<
+    string,
+    { readonly path: string; terminal: boolean }
+  >();
+  const settleWaiters = new Set<() => void>();
+
+  const hasPendingScript = (): boolean => {
+    for (const request of scriptRequests.values()) {
+      if (!request.terminal) return true;
+    }
+    return false;
+  };
+
+  const releaseSettleWaiters = (): void => {
+    for (const waiter of [...settleWaiters]) waiter();
+    settleWaiters.clear();
+  };
+
+  /** Script requestId의 terminal lifecycle을 성공/실패 어느 쪽이든 확정한다. */
+  const markScriptTerminal = (requestId: string | undefined): void => {
+    if (requestId === undefined) return;
+    const request = scriptRequests.get(requestId);
+    if (request === undefined || request.terminal) return;
+    request.terminal = true;
+    if (!hasPendingScript()) releaseSettleWaiters();
+  };
+
   let accepting = true;
   let detached = false;
   const unsubscribe: (() => void)[] = [];
@@ -265,6 +299,7 @@ export const beginPageResourceCollection = async (
         // Cleanup is best-effort and must preserve the primary lifecycle error.
       }
     }
+    releaseSettleWaiters();
   };
 
   const trackRequest = (params: object): void => {
@@ -280,11 +315,15 @@ export const beginPageResourceCollection = async (
       : undefined;
     if (requestId === undefined || path === undefined) return;
     requests.set(requestId, { type, path });
+    if (type === "Script") {
+      scriptRequests.set(requestId, { path, terminal: false });
+    }
   };
 
   const trackLoadingFailure = (params: object): void => {
     const requestId = nonEmptyText(eventValue(params, "requestId"));
     if (requestId === undefined) return;
+    markScriptTerminal(requestId);
     const request = requests.get(requestId);
     if (request === undefined) return;
     const errorText = nonEmptyText(eventValue(params, "errorText"));
@@ -307,9 +346,8 @@ export const beginPageResourceCollection = async (
   const trackHttpFailure = (params: object): void => {
     const requestId = nonEmptyText(eventValue(params, "requestId"));
     if (requestId === undefined) return;
-    const request = requests.get(requestId);
     const response = eventValue(params, "response");
-    if (request === undefined || !isRecord(response)) return;
+    if (!isRecord(response)) return;
     const status = eventValue(response, "status");
     if (
       typeof status !== "number" ||
@@ -319,6 +357,9 @@ export const beginPageResourceCollection = async (
     ) {
       return;
     }
+    markScriptTerminal(requestId);
+    const request = requests.get(requestId);
+    if (request === undefined) return;
     requests.delete(requestId);
     failedRequests.push({
       kind: "http-error",
@@ -328,7 +369,9 @@ export const beginPageResourceCollection = async (
 
   const trackLoadingFinished = (params: object): void => {
     const requestId = nonEmptyText(eventValue(params, "requestId"));
-    if (requestId !== undefined) requests.delete(requestId);
+    if (requestId === undefined) return;
+    markScriptTerminal(requestId);
+    requests.delete(requestId);
   };
 
   const subscribe = (
@@ -364,11 +407,38 @@ export const beginPageResourceCollection = async (
     detach();
   };
 
+  const waitForScriptSettle = (deadline: DeadlineSignal): Promise<void> =>
+    new Promise((resolve) => {
+      if (!accepting || !hasPendingScript() || deadline.expired()) {
+        resolve();
+        return;
+      }
+      let cancelExpire = (): void => {};
+      const waiter = (): void => {
+        cancelExpire();
+        resolve();
+      };
+      settleWaiters.add(waiter);
+      cancelExpire = deadline.onExpire(() => {
+        settleWaiters.delete(waiter);
+        resolve();
+      });
+    });
+
   let finished: Promise<PageResources> | undefined;
   const finish = (): Promise<PageResources> => {
     if (finished !== undefined) return finished;
     const completion = deferred<PageResources>();
     finished = completion.promise;
+    const pendingScripts: PageSignal[] = [];
+    for (const request of scriptRequests.values()) {
+      if (!request.terminal) {
+        pendingScripts.push({
+          kind: "script-pending",
+          text: `path=${request.path}`,
+        });
+      }
+    }
     detach();
     void Promise.resolve()
       .then(async () => {
@@ -388,13 +458,14 @@ export const beginPageResourceCollection = async (
           // 다른 것(evaluation exception 모양 등)은 페이지 콘텐츠 문제가 아니라
           // CDP 쪽 사정이므로, 눈에 보이지 않는 이 데이터 하나 때문에 이미 수집한
           // failedRequests까지 버리면 안 된다 — 빈 목록으로 degrade한다.
-          return freezeResources([], [], failedRequests);
+          return freezeResources([], [], failedRequests, pendingScripts);
         }
         const resources = readResourcesFromSnapshot(snapshot);
         return freezeResources(
           resources.scripts,
           resources.stylesheets,
           failedRequests,
+          pendingScripts,
         );
       })
       .then(completion.resolve, completion.reject);
@@ -404,5 +475,6 @@ export const beginPageResourceCollection = async (
   return {
     finish,
     dispose,
+    waitForScriptSettle,
   };
 };
