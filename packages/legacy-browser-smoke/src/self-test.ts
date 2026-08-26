@@ -7,6 +7,7 @@ import {
   type SmokePage,
 } from "./config.js";
 import type { ChromiumExecutable, EnsureChromiumOptions } from "./preflight.js";
+import type { SandboxDisabledOption, SandboxOption } from "./runtime.js";
 import {
   runSmoke,
   type RunSmokeInput,
@@ -23,9 +24,11 @@ export interface LegacyBrowserSmoke {
   run(options: {
     readonly origin: string;
     readonly executablePath?: string;
+    readonly sandbox?: SandboxOption | SandboxDisabledOption;
   }): Promise<SmokeReport>;
   selfTest(options?: {
     readonly executablePath?: string;
+    readonly sandbox?: SandboxOption | SandboxDisabledOption;
   }): Promise<SelfTestReport>;
 }
 
@@ -239,6 +242,7 @@ export const createLegacyBrowserSmokeWithAdapters = (
     run: async (options: {
       readonly origin: string;
       readonly executablePath?: string;
+      readonly sandbox?: SandboxOption | SandboxDisabledOption;
     }): Promise<SmokeReport> => {
       const executable = await resolveExecutable(options.executablePath);
       return adapters.runSmoke({
@@ -247,10 +251,16 @@ export const createLegacyBrowserSmokeWithAdapters = (
         pages: normalizedConfig.pages,
         timeoutMs: normalizedConfig.timeoutMs,
         knownUnsupported: normalizedConfig.knownUnsupported ?? [],
+        // RunSmokeInput.sandbox는 `exactOptionalPropertyTypes` 아래 명시적
+        // undefined를 허용하지 않으므로, 값이 있을 때만 key를 만든다.
+        ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
       });
     },
     selfTest: async (
-      options: { readonly executablePath?: string } = {},
+      options: {
+        readonly executablePath?: string;
+        readonly sandbox?: SandboxOption | SandboxDisabledOption;
+      } = {},
     ): Promise<SelfTestReport> => {
       const executable = await resolveExecutable(options.executablePath);
       // server는 executable 확보 이후에만 만든다 — 그래야 provisioning 실패
@@ -265,6 +275,9 @@ export const createLegacyBrowserSmokeWithAdapters = (
           // 소비자 config의 knownUnsupported를 쓰지 않는다. self-test가 유도한
           // parse 실패가 known 목록에 흡수되면 판정이 무의미해진다.
           knownUnsupported: [],
+          ...(options.sandbox === undefined
+            ? {}
+            : { sandbox: options.sandbox }),
         });
         return toSelfTestReport(smokeReport);
       } finally {

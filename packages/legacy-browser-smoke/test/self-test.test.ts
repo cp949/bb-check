@@ -229,6 +229,44 @@ describe("createLegacyBrowserSmoke().run", () => {
       failure,
     );
   });
+
+  it("sandbox 옵션을 RunSmokeInput.sandbox로 그대로 전달한다", async () => {
+    const inputs: RunSmokeInput[] = [];
+    const smoke = createLegacyBrowserSmokeWithAdapters(consumerConfig, {
+      ensureChromium: async () => executable,
+      runSmoke: async (input) => {
+        inputs.push(input);
+        return consumerReport;
+      },
+    });
+
+    await smoke.run({
+      origin: "http://127.0.0.1:3000",
+      sandbox: { mode: "disabled", reason: "test" },
+    });
+
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]?.sandbox).toStrictEqual({
+      mode: "disabled",
+      reason: "test",
+    });
+  });
+
+  it("sandbox 옵션을 생략하면 RunSmokeInput에 sandbox key 자체가 없다", async () => {
+    const inputs: RunSmokeInput[] = [];
+    const smoke = createLegacyBrowserSmokeWithAdapters(consumerConfig, {
+      ensureChromium: async () => executable,
+      runSmoke: async (input) => {
+        inputs.push(input);
+        return consumerReport;
+      },
+    });
+
+    await smoke.run({ origin: "http://127.0.0.1:3000" });
+
+    expect(inputs).toHaveLength(1);
+    expect("sandbox" in (inputs[0] as RunSmokeInput)).toBe(false);
+  });
 });
 
 describe("createLegacyBrowserSmoke().selfTest", () => {
@@ -288,6 +326,41 @@ describe("createLegacyBrowserSmoke().selfTest", () => {
       { name: "baseline", path: "/baseline", ready: selfTestReady },
       { name: "legacy-syntax", path: "/legacy-syntax", ready: selfTestReady },
     ]);
+  });
+
+  it("sandbox 옵션을 RunSmokeInput.sandbox로 그대로 전달한다", async () => {
+    const inputs: RunSmokeInput[] = [];
+    const smoke = createLegacyBrowserSmokeWithAdapters(consumerConfig, {
+      ensureChromium: async () => executable,
+      runSmoke: async (input) => {
+        inputs.push(input);
+        return passingSelfTestReport;
+      },
+    });
+
+    await smoke.selfTest({ sandbox: { mode: "disabled", reason: "test" } });
+
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]?.sandbox).toStrictEqual({
+      mode: "disabled",
+      reason: "test",
+    });
+  });
+
+  it("sandbox 옵션을 생략하면 RunSmokeInput에 sandbox key 자체가 없다", async () => {
+    const inputs: RunSmokeInput[] = [];
+    const smoke = createLegacyBrowserSmokeWithAdapters(consumerConfig, {
+      ensureChromium: async () => executable,
+      runSmoke: async (input) => {
+        inputs.push(input);
+        return passingSelfTestReport;
+      },
+    });
+
+    await smoke.selfTest();
+
+    expect(inputs).toHaveLength(1);
+    expect("sandbox" in (inputs[0] as RunSmokeInput)).toBe(false);
   });
 
   it("소비자 config의 pages와 knownUnsupported를 self test에 쓰지 않는다", async () => {

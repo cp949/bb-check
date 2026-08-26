@@ -746,6 +746,127 @@ test("dependency 필드의 prefix 없는 POSIX와 Windows local path를 거부�
   assert.doesNotMatch(problems, /homeShorthand.*local path/u);
 });
 
+test("bin target이 tarball에 없으면 string/object 두 형태 모두 문제로 보고한다", async () => {
+  const cases = [
+    ["bin string 형태", "./bin/cli.mjs"],
+    ["bin object 형태", { cli: "./bin/cli.mjs" }],
+  ];
+
+  for (const [name, bin] of cases) {
+    const root = await createRepo();
+    await writePackage(
+      root,
+      "packages/bin-missing",
+      {
+        ...publicManifest("@fixture/bin-missing", { ".": "./dist/index.js" }),
+        bin,
+      },
+      {
+        "dist/index.js": "export const value = 1;\n",
+        "dist/index.d.ts": "export declare const value: 1;\n",
+        "README.md": "# bin missing\n",
+        LICENSE: "fixture license\n",
+      },
+    );
+
+    const result = await checkPublicWorkspacePackages({
+      repoRoot: root,
+      readPackFiles: async () => [
+        "package.json",
+        "README.md",
+        "LICENSE",
+        "dist/index.js",
+        "dist/index.d.ts",
+      ],
+    });
+
+    assert.match(
+      result.problems.join("\n"),
+      /bin target이 tarball에 없습니다: bin\/cli\.mjs/u,
+      name,
+    );
+  }
+});
+
+test("bin target은 있지만 declaration이 tarball에 없으면 문제로 보고한다", async () => {
+  const root = await createRepo();
+  await writePackage(
+    root,
+    "packages/bin-no-declaration",
+    {
+      ...publicManifest("@fixture/bin-no-declaration", {
+        ".": "./dist/index.js",
+      }),
+      files: ["dist/**", "bin/**", "README.md", "LICENSE", "package.json"],
+      bin: { cli: "./bin/cli.mjs" },
+    },
+    {
+      "dist/index.js": "export const value = 1;\n",
+      "dist/index.d.ts": "export declare const value: 1;\n",
+      "README.md": "# bin no declaration\n",
+      LICENSE: "fixture license\n",
+      "bin/cli.mjs": "#!/usr/bin/env node\nexport {};\n",
+    },
+  );
+
+  const result = await checkPublicWorkspacePackages({
+    repoRoot: root,
+    readPackFiles: async () => [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/index.js",
+      "dist/index.d.ts",
+      "bin/cli.mjs",
+    ],
+  });
+
+  assert.match(
+    result.problems.join("\n"),
+    /bin target의 declaration이 없습니다: bin\/cli\.mjs/u,
+  );
+  assert.doesNotMatch(
+    result.problems.join("\n"),
+    /bin target이 tarball에 없습니다/u,
+  );
+});
+
+test("bin target과 declaration이 모두 있으면 문제가 없다", async () => {
+  const root = await createRepo();
+  await writePackage(
+    root,
+    "packages/bin-complete",
+    {
+      ...publicManifest("@fixture/bin-complete", { ".": "./dist/index.js" }),
+      files: ["dist/**", "bin/**", "README.md", "LICENSE", "package.json"],
+      bin: { cli: "./bin/cli.mjs" },
+    },
+    {
+      "dist/index.js": "export const value = 1;\n",
+      "dist/index.d.ts": "export declare const value: 1;\n",
+      "README.md": "# bin complete\n",
+      LICENSE: "fixture license\n",
+      "bin/cli.mjs": "#!/usr/bin/env node\nexport {};\n",
+      "bin/cli.d.mts": "export {};\n",
+    },
+  );
+
+  const result = await checkPublicWorkspacePackages({
+    repoRoot: root,
+    readPackFiles: async () => [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/index.js",
+      "dist/index.d.ts",
+      "bin/cli.mjs",
+      "bin/cli.d.mts",
+    ],
+  });
+
+  assert.doesNotMatch(result.problems.join("\n"), /packages\/bin-complete/u);
+});
+
 test("next-webpack-baseline generated LICENSE는 Git ignore 대상이다", () => {
   const repoRoot = new URL("..", import.meta.url);
   const path = "packages/next-webpack-baseline/LICENSE";

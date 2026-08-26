@@ -12,6 +12,9 @@ const defaultRepoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const PUBLIC_ALLOWED_EXACT = new Set(["README.md", "LICENSE", "package.json"]);
 const DIST_FILE_DECLARATIONS = new Set(["dist", "dist/", "dist/*", "dist/**"]);
+// bin/**: CLI 진입점을 공개하는 package(예: legacy-browser-smoke)를 위한
+// allowlist. dist/**와 동일한 규칙(디렉터리 전체 허용)을 따른다.
+const BIN_FILE_DECLARATIONS = new Set(["bin", "bin/", "bin/*", "bin/**"]);
 const LEGACY_FORBIDDEN_DEPENDENCIES = new Set([
   "@cp949/bb-core",
   "@cp949/bb-library",
@@ -164,13 +167,16 @@ const normalizeArtifactPath = (value) =>
   value.startsWith("./") ? value.slice(2) : value;
 
 const isAllowedPublicPath = (path) =>
-  PUBLIC_ALLOWED_EXACT.has(path) || path.startsWith("dist/");
+  PUBLIC_ALLOWED_EXACT.has(path) ||
+  path.startsWith("dist/") ||
+  path.startsWith("bin/");
 
 const isAllowedFilesDeclaration = (value) => {
   const normalized = normalizeArtifactPath(value);
   return (
     PUBLIC_ALLOWED_EXACT.has(normalized) ||
-    DIST_FILE_DECLARATIONS.has(normalized)
+    DIST_FILE_DECLARATIONS.has(normalized) ||
+    BIN_FILE_DECLARATIONS.has(normalized)
   );
 };
 
@@ -178,6 +184,7 @@ const isCoveredByFiles = (path, patterns) =>
   patterns.some((pattern) => {
     const normalized = normalizeArtifactPath(pattern);
     if (DIST_FILE_DECLARATIONS.has(normalized)) return path.startsWith("dist/");
+    if (BIN_FILE_DECLARATIONS.has(normalized)) return path.startsWith("bin/");
     return path === normalized;
   });
 

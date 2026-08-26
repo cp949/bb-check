@@ -5,7 +5,7 @@
 // 내장 test runner로 돈다(root package.json의 "test"는 이 파일을
 // --exclude로 제외한다) — `node --test scripts/check-public-words.test.mjs`.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -64,26 +64,116 @@ test("CLI typo와 duplicate는 npm pack 전에 실패하고 secret argv를 출�
   }
 });
 
-test("공개 tarball scan 대상은 next webpack baseline 하나다", async () => {
+test("공개 tarball scan 대상은 next-webpack-baseline, legacy-browser-smoke 순서다", async () => {
   assert.deepEqual(
     (await listPublicPackageDirs()).map((path) =>
       relative(repoRoot, path).replaceAll("\\", "/"),
     ),
-    ["packages/next-webpack-baseline"],
+    ["packages/next-webpack-baseline", "packages/legacy-browser-smoke"],
   );
 });
 
-test("tracked scan은 공개 README와 next package 파일로 제한한다", () => {
+test("tracked scan은 공개 README와 두 공개 package 파일로 제한한다", () => {
   const files = listTrackedFiles();
   assert.ok(files.includes("README.md"));
   assert.ok(files.includes("packages/next-webpack-baseline/README.md"));
+  assert.ok(files.includes("packages/legacy-browser-smoke/README.md"));
   assert.ok(
     files.every(
       (file) =>
         file === "README.md" ||
-        file.startsWith("packages/next-webpack-baseline/"),
+        file.startsWith("packages/next-webpack-baseline/") ||
+        file.startsWith("packages/legacy-browser-smoke/"),
     ),
   );
+});
+
+describe("listPublicPackageDirs: manifest 검증(fixture root 주입)", () => {
+  const fixtureRoots = [];
+
+  after(async () => {
+    await Promise.all(
+      fixtureRoots
+        .splice(0)
+        .map((dir) => rm(dir, { recursive: true, force: true })),
+    );
+  });
+
+  /** packages/<dir>/package.json을 갖는 임시 저장소 root를 만든다. manifest가 undefined면 그 workspace 디렉터리 자체를 만들지 않는다(존재하지 않는 manifest 시나리오). */
+  const createFixtureRoot = async ({ nextManifest, legacyManifest }) => {
+    const root = await mkdtemp(
+      join(tmpdir(), "bb-check-public-words-manifest-"),
+    );
+    fixtureRoots.push(root);
+    for (const [dir, manifest] of [
+      ["next-webpack-baseline", nextManifest],
+      ["legacy-browser-smoke", legacyManifest],
+    ]) {
+      if (manifest === undefined) continue;
+      const packageDir = join(root, "packages", dir);
+      await mkdir(packageDir, { recursive: true });
+      await writeFile(
+        join(packageDir, "package.json"),
+        JSON.stringify(manifest, null, 2),
+        "utf8",
+      );
+    }
+    return root;
+  };
+
+  const validNextManifest = {
+    name: "@cp949/next-webpack-baseline",
+    private: false,
+  };
+  const validLegacyManifest = {
+    name: "@cp949/legacy-browser-smoke",
+    private: false,
+  };
+
+  test("두 manifest가 모두 유효하면 순서대로 경로를 반환한다", async () => {
+    const root = await createFixtureRoot({
+      nextManifest: validNextManifest,
+      legacyManifest: validLegacyManifest,
+    });
+    const dirs = await listPublicPackageDirs({ root });
+    assert.deepEqual(
+      dirs.map((dir) => relative(root, dir).replaceAll("\\", "/")),
+      ["packages/next-webpack-baseline", "packages/legacy-browser-smoke"],
+    );
+  });
+
+  test("next-webpack-baseline manifest name이 틀리면 그 workspace를 명시해 실패한다", async () => {
+    const root = await createFixtureRoot({
+      nextManifest: { name: "@cp949/wrong-name", private: false },
+      legacyManifest: validLegacyManifest,
+    });
+    await assert.rejects(
+      listPublicPackageDirs({ root }),
+      /packages\/next-webpack-baseline/u,
+    );
+  });
+
+  test("legacy-browser-smoke manifest가 private이면 그 workspace를 명시해 실패한다", async () => {
+    const root = await createFixtureRoot({
+      nextManifest: validNextManifest,
+      legacyManifest: { name: "@cp949/legacy-browser-smoke", private: true },
+    });
+    await assert.rejects(
+      listPublicPackageDirs({ root }),
+      /packages\/legacy-browser-smoke/u,
+    );
+  });
+
+  test("공개 package manifest 파일 자체가 없으면 그 workspace를 명시해 실패한다", async () => {
+    const root = await createFixtureRoot({
+      nextManifest: undefined,
+      legacyManifest: validLegacyManifest,
+    });
+    await assert.rejects(
+      listPublicPackageDirs({ root }),
+      /packages\/next-webpack-baseline/u,
+    );
+  });
 });
 
 test("Windows npm pack은 shell 없이 npm CLI를 Node로 실행한다", () => {
@@ -216,17 +306,22 @@ test("npm pack 결과의 identity와 contained POSIX file path를 검증한다",
   }
 });
 
-test("tarball 수집은 주입된 npm 경계의 검증된 결과만 사용한다", async () => {
+test("tarball 수집은 두 공개 package 각각에 주입된 npm 경계의 검증된 결과만 사용한다", async () => {
   const calls = [];
   const roots = await listTarballRoots({
     runCommand(command, args, options) {
       calls.push({ command, args, cwd: options.cwd });
+      // 각 package 자신의 실제 manifest identity를 그대로 돌려줘야
+      // parsePackResult의 identity 검증(name/version 일치)을 통과한다.
+      const manifest = JSON.parse(
+        readFileSync(join(options.cwd, "package.json"), "utf8"),
+      );
       return {
         status: 0,
         stdout: JSON.stringify([
           {
-            name: "@cp949/next-webpack-baseline",
-            version: "0.1.0",
+            name: manifest.name,
+            version: manifest.version,
             files: [{ path: "dist/index.js" }],
           },
         ]),
@@ -235,12 +330,20 @@ test("tarball 수집은 주입된 npm 경계의 검증된 결과만 사용한다
     },
   });
 
-  assert.deepEqual(roots, ["packages/next-webpack-baseline/dist/index.js"]);
-  assert.equal(calls.length, 1);
+  assert.deepEqual(roots, [
+    "packages/next-webpack-baseline/dist/index.js",
+    "packages/legacy-browser-smoke/dist/index.js",
+  ]);
+  assert.equal(calls.length, 2);
   assert.deepEqual(calls[0].args, ["pack", "--dry-run", "--json"]);
+  assert.deepEqual(calls[1].args, ["pack", "--dry-run", "--json"]);
   assert.match(
     calls[0].cwd.replaceAll("\\", "/"),
     /packages\/next-webpack-baseline$/u,
+  );
+  assert.match(
+    calls[1].cwd.replaceAll("\\", "/"),
+    /packages\/legacy-browser-smoke$/u,
   );
 });
 

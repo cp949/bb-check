@@ -32,6 +32,7 @@ describe("@cp949/legacy-browser-smoke 공개 package 계약", () => {
       types: "./dist/index.d.ts",
     });
     expect(manifest.files).toEqual([
+      "bin/**",
       "dist/**",
       "README.md",
       "LICENSE",

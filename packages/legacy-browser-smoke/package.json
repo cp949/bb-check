@@ -13,7 +13,11 @@
       "import": "./dist/index.js"
     }
   },
+  "bin": {
+    "legacy-browser-smoke-self-test": "./bin/legacy-browser-smoke-self-test.mjs"
+  },
   "files": [
+    "bin/**",
     "dist/**",
     "README.md",
     "LICENSE",

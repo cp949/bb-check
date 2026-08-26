@@ -7,6 +7,11 @@ on:
     branches: [main, dev]
   pull_request:
   workflow_dispatch:
+    inputs:
+      run-legacy-self-test:
+        description: "고정 Chromium 75를 실제로 내려받아 self-test를 실행한다"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -35,6 +40,7 @@ jobs:
           tests
           scripts
           packages/next-webpack-baseline
+          packages/legacy-browser-smoke
           apps/next-pages-fixture
 
       - name: lint root, active workspaces, and release scripts
@@ -42,30 +48,35 @@ jobs:
           npx eslint tests scripts --no-error-on-unmatched-pattern
           npm run lint --workspace=@cp949/next-webpack-baseline
           npm run lint --workspace=next-pages-fixture
+          npm run lint --workspace=@cp949/legacy-browser-smoke
 
       - name: typecheck root and active workspaces
         run: |
           npx tsc -p tsconfig.json --noEmit
           npm run typecheck --workspace=@cp949/next-webpack-baseline
           npm run typecheck --workspace=next-pages-fixture
+          npm run typecheck --workspace=@cp949/legacy-browser-smoke
 
       - name: build active packages and Next.js 16 Webpack fixture
         run: |
           npm run build --workspace=@cp949/next-webpack-baseline
           npm run build --workspace=next-pages-fixture
+          npm run build --workspace=@cp949/legacy-browser-smoke
 
       - name: root and active package tests
         run: |
           npx vitest run tests --no-file-parallelism
           npm test --workspace=@cp949/next-webpack-baseline
+          npm test --workspace=@cp949/legacy-browser-smoke
 
       - name: release script tests
-        run: npm run test:scripts:next
+        run: npm run test:scripts
 
       - name: package files and packed consumer
         run: |
           npm run check-package-files
           npm run test-packed-package -- --package @cp949/next-webpack-baseline
+          npm run test-packed-package -- --package @cp949/legacy-browser-smoke
 
       - name: public words generic scan
         run: npm run check-public-words
@@ -130,3 +141,35 @@ jobs:
 
       - name: downlevel and Webpack plugin tests
         run: npx vitest run packages/next-webpack-baseline/test/downlevel.test.ts packages/next-webpack-baseline/test/webpack-plugin.test.ts
+
+  legacy-self-test:
+    name: legacy-self-test (manual Chromium 75 self-test)
+    if: github.event_name == 'workflow_dispatch' && inputs.run-legacy-self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: install
+        run: npm clean-install
+
+      - name: build legacy-browser-smoke
+        run: npm run build --workspace=@cp949/legacy-browser-smoke
+
+      - name: cache managed Chromium 75
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/@cp949/legacy-browser-smoke
+          key: legacy-chromium-linux-x64-650583-10ae4e05d9f01a8b646dd2ccc2ac1135e597c472abe5be71552aae7d8a35e2ac
+
+      # npm exec는 `--` 뒤를 그대로 <cmd> [args...]로 실행한다. 두 번째 `--`를
+      # 더 넣으면 CLI 자신의 argv 파서가 그 `--`를 "알 수 없는 인자"로 보고
+      # fail-closed로 거부한다(로컬 --help로 실측). --no-sandbox 뒤 이유는
+      # 격리된 GitHub Actions runner container 전용이라는 뜻이다.
+      - name: run legacy-browser-smoke self-test
+        run: npm exec --workspace=@cp949/legacy-browser-smoke -- legacy-browser-smoke-self-test --no-sandbox "isolated GitHub Actions container"

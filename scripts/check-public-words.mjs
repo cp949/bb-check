@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // 공개 저장소에 내부 전용 식별자가 섞여 있지 않은지 검사한다. 두 소스를
 // 스캔한다:
-//   1. root 공개 README와 next-webpack-baseline의 git 추적 파일
-//   2. @cp949/next-webpack-baseline이 실제로 publish할 tarball 파일 목록
+//   1. root 공개 README와 공개 package(next-webpack-baseline,
+//      legacy-browser-smoke) 각각의 git 추적 파일
+//   2. 각 공개 package가 실제로 publish할 tarball 파일 목록
 //      (`npm pack --dry-run --json`)
 //
 // 실제 forbidden pattern은 이 저장소 어디에도 하드코딩하지 않는다 — 반드시
@@ -179,7 +180,7 @@ export async function runScanner({ roots, patterns, cwd = process.cwd() }) {
 
 // ---- 실제 파일 소스 수집(git-tracked / tarball) -----------------------------
 
-/** 공개 README와 next package의 추적 파일 목록을 얻는다. */
+/** 공개 README와 공개 package들의 추적 파일 목록을 얻는다. */
 export const listTrackedFiles = () => {
   const result = spawnSync("git", ["ls-files", "-z"], {
     cwd: repoRoot,
@@ -198,25 +199,57 @@ export const listTrackedFiles = () => {
     .filter(
       (entry) =>
         entry === "README.md" ||
-        entry.startsWith("packages/next-webpack-baseline/"),
+        entry.startsWith("packages/next-webpack-baseline/") ||
+        entry.startsWith("packages/legacy-browser-smoke/"),
     );
 };
 
-/** A8 release 대상인 공개 package 디렉터리만 검증해 반환한다. */
-export const listPublicPackageDirs = async () => {
-  const packageDir = join(repoRoot, "packages", "next-webpack-baseline");
-  const manifest = JSON.parse(
-    await readFile(join(packageDir, "package.json"), "utf8"),
-  );
-  if (
-    manifest.name !== "@cp949/next-webpack-baseline" ||
-    manifest.private === true
-  ) {
-    throw new Error(
-      "next-webpack-baseline 공개 package manifest가 올바르지 않습니다.",
-    );
+// A8 release 대상 공개 package 목록. 순서가 스캔·tarball 수집 순서를
+// 결정하므로 next-webpack-baseline을 먼저, legacy-browser-smoke를
+// 다음으로 고정한다.
+const PUBLIC_PACKAGES = [
+  {
+    workspacePath: "packages/next-webpack-baseline",
+    name: "@cp949/next-webpack-baseline",
+  },
+  {
+    workspacePath: "packages/legacy-browser-smoke",
+    name: "@cp949/legacy-browser-smoke",
+  },
+];
+
+/**
+ * A8 release 대상인 공개 package 디렉터리들을 fail-closed로 검증해
+ * PUBLIC_PACKAGES 순서 그대로 반환한다. 각 package는 manifest가
+ * 존재하고, name이 정확히 일치하고, private이 true가 아니어야 한다 —
+ * 하나라도 어긋나면 어느 workspace가 문제인지 명시해 즉시 던진다.
+ *
+ * @param {{ root?: string }} [options] 테스트가 임시 fixture 저장소를
+ *   주입할 수 있는 유일한 경계. 생략하면 실제 저장소 root를 쓴다.
+ */
+export const listPublicPackageDirs = async ({ root = repoRoot } = {}) => {
+  const dirs = [];
+  for (const { workspacePath, name } of PUBLIC_PACKAGES) {
+    const packageDir = join(root, ...workspacePath.split("/"));
+    let manifest;
+    try {
+      manifest = JSON.parse(
+        await readFile(join(packageDir, "package.json"), "utf8"),
+      );
+    } catch (cause) {
+      throw new Error(
+        `${workspacePath} 공개 package manifest를 읽을 수 없습니다(package.json 존재 여부를 확인하세요).`,
+        { cause },
+      );
+    }
+    if (manifest.name !== name || manifest.private === true) {
+      throw new Error(
+        `${workspacePath} 공개 package manifest가 올바르지 않습니다(name 또는 private 필드를 확인하세요).`,
+      );
+    }
+    dirs.push(packageDir);
   }
-  return [packageDir];
+  return dirs;
 };
 
 const invalidPack = (message) => {
