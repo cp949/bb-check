@@ -24,6 +24,7 @@ import {
   createChromiumProvisioner,
   disposeNodeResponse,
   extractZipEntry,
+  normalizeVersionOutput,
   type ChromiumProvisionerAdapters,
 } from "../src/chromium.js";
 import { LegacyBrowserSmokeError } from "../src/errors.js";
@@ -2156,5 +2157,20 @@ describe("Chromium secure provisioning", () => {
       }),
     );
     expect(http).not.toHaveBeenCalled();
+  });
+});
+
+describe("normalizeVersionOutput", () => {
+  it("Chromium --version 출력의 후행 공백과 개행을 제거한다", () => {
+    // 실측: Chromium 75 리눅스 빌드는 버전 문자열 뒤에 공백 한 칸을 붙여 출력한다.
+    expect(normalizeVersionOutput("Chromium 75.0.3765.0 \n")).toBe(
+      "Chromium 75.0.3765.0",
+    );
+  });
+
+  it("CRLF 개행과 앞뒤 공백도 동일하게 정규화한다", () => {
+    expect(normalizeVersionOutput(" Chromium 75.0.3765.0\r\n")).toBe(
+      "Chromium 75.0.3765.0",
+    );
   });
 });

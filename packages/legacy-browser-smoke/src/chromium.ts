@@ -446,6 +446,13 @@ const yauzlArchive: ArchiveAdapter = {
   },
 };
 
+/**
+ * `--version` stdout을 registry 문자열과 정확 비교 가능한 형태로 정규화한다.
+ * 실측: Chromium 75 Linux 빌드는 버전 뒤에 후행 공백 한 칸을 붙여 출력하므로
+ * 개행만 제거하면 registry와의 정확 비교가 항상 실패한다.
+ */
+export const normalizeVersionOutput = (stdout: string): string => stdout.trim();
+
 const runNodeVersion = (
   executablePath: string,
   options: { readonly signal: AbortSignal; readonly timeoutMs: number },
@@ -465,7 +472,7 @@ const runNodeVersion = (
           reject(error);
           return;
         }
-        resolveVersion(stdout.replace(/\r?\n$/u, ""));
+        resolveVersion(normalizeVersionOutput(stdout));
       },
     );
   });
