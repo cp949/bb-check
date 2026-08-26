@@ -26,7 +26,7 @@
     "test-packed-package": "node scripts/test-packed-package.mjs",
     "check-public-words": "node scripts/check-public-words.mjs",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm test && npm run check-package-files && npm run test-packed-package -- --package @cp949/next-webpack-baseline",
-    "verify:package-release": "npm run format:check && npm run lint:release && npm run typecheck:release && npm run build:release && npm test && npm run check-package-files && npm run test-packed-package -- --package @cp949/next-webpack-baseline",
+    "verify:package-release": "npm run format:check && npm run lint:release && npm run typecheck:release && npm run build:release && npm test && npm run check-package-files && npm run test-packed-package -- --package @cp949/next-webpack-baseline && npm run test-packed-package -- --package @cp949/legacy-browser-smoke",
     "verify:release": "npm run verify:package-release && npm run test:scripts",
     "verify:next-release": "npm run format:check:next && npm run lint --workspace=@cp949/next-webpack-baseline && npm run lint --workspace=next-pages-fixture && npm run typecheck --workspace=@cp949/next-webpack-baseline && npm run typecheck --workspace=next-pages-fixture && npm run build --workspace=@cp949/next-webpack-baseline && npm test --workspace=@cp949/next-webpack-baseline && npm run check-package-files && npm run test-packed-package -- --package @cp949/next-webpack-baseline && npm run test:scripts:next && npm run check-public-words",
     "publish:npm": "node scripts/publish-package.mjs"

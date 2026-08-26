@@ -8,11 +8,18 @@ import test from "node:test";
 
 import {
   classifyRegistryVersionResult,
+  collectExportPaths,
   createCommandInvocation,
+  describeRegistryLookup,
+  displayWidth,
+  formatTagMessage,
   parsePublishArguments,
   planPublish,
+  planTagPush,
   publishPackage,
   selectPublishPackage,
+  shortPackageName,
+  statusMark,
   validatePublishLifecycle,
 } from "./publish-package.mjs";
 
@@ -20,8 +27,11 @@ const releaseEnvironment = {
   BB_CHECK_FORBIDDEN_WORDS: "synthetic-release-pattern",
 };
 
-test("배포 package 이름은 반드시 명시해야 한다", () => {
-  assert.throws(() => parsePublishArguments([]), /--package/);
+test("인자가 없으면 대화형 메뉴를 선택한다", () => {
+  assert.deepEqual(parsePublishArguments([]), { menu: true });
+});
+
+test("명시적 인자를 하나라도 주면 package 이름을 반드시 요구한다", () => {
   assert.throws(() => parsePublishArguments(["--dry-run"]), /--package/);
 });
 
@@ -297,6 +307,20 @@ test("선택한 package는 자신의 verify script를 함께 돌려준다", () =
   );
 });
 
+test("legacy-browser-smoke도 허용 package로 등록되어 있다", () => {
+  assert.deepEqual(
+    selectPublishPackage("@cp949/legacy-browser-smoke", {
+      name: "@cp949/legacy-browser-smoke",
+    }),
+    {
+      packageName: "@cp949/legacy-browser-smoke",
+      packageDirectory: "packages/legacy-browser-smoke",
+      publishSpec: "./packages/legacy-browser-smoke",
+      verifyScript: "verify:package-release",
+    },
+  );
+});
+
 test("release 검증 script는 하드코딩이 아니라 선택된 package에서 온다", () => {
   const commands = [];
   const succeeded = publishPackage(
@@ -565,4 +589,106 @@ test("package lifecycle은 direct actual을 차단하고 wrapper/dry-run만 검�
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("exports의 문자열 leaf만 중복 없이 모은다", () => {
+  assert.deepEqual(
+    collectExportPaths({
+      ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+      "./extra": "./dist/index.js",
+    }),
+    ["./dist/index.d.ts", "./dist/index.js"],
+  );
+  assert.deepEqual(collectExportPaths(undefined), []);
+});
+
+test("한글은 표시 폭을 두 칸으로 센다", () => {
+  assert.equal(displayWidth("ab"), 2);
+  assert.equal(displayWidth("가나"), 4);
+});
+
+test("registry 조회 결과를 사람이 읽을 문구로 바꾼다", () => {
+  assert.equal(
+    describeRegistryLookup({ status: "published", version: "0.1.0" }),
+    "0.1.0",
+  );
+  assert.equal(describeRegistryLookup({ status: "missing" }), "미배포");
+  assert.equal(
+    describeRegistryLookup({ status: "error", reason: "EAI_AGAIN" }),
+    "조회 실패(EAI_AGAIN)",
+  );
+});
+
+test("registry version이 로컬과 같을 때만 배포됨으로 표시한다", () => {
+  assert.equal(
+    statusMark({ status: "published", version: "0.1.0" }, "0.1.0"),
+    "배포됨",
+  );
+  assert.equal(
+    statusMark({ status: "published", version: "0.0.9" }, "0.1.0"),
+    "대상",
+  );
+  assert.equal(statusMark({ status: "missing" }, "0.1.0"), "대상");
+});
+
+test("태그 이름은 scope를 뺀 package 이름을 쓴다", () => {
+  assert.equal(
+    shortPackageName("@cp949/next-webpack-baseline"),
+    "next-webpack-baseline",
+  );
+  assert.equal(shortPackageName("unscoped-package"), "unscoped-package");
+});
+
+test("태그 메시지에 package와 version을 적는다", () => {
+  assert.equal(
+    formatTagMessage("@cp949/next-webpack-baseline", "0.1.0"),
+    "@cp949/next-webpack-baseline@0.1.0",
+  );
+});
+
+test("태그가 없으면 만들고 push한다", () => {
+  assert.deepEqual(
+    planTagPush({
+      tagName: "next-webpack-baseline@0.1.0",
+      workingTreeDirty: false,
+      tagCommit: null,
+      headCommit: "abc",
+    }),
+    { action: "create-and-push", tagName: "next-webpack-baseline@0.1.0" },
+  );
+});
+
+test("태그가 이미 HEAD를 가리키면 push만 한다", () => {
+  assert.deepEqual(
+    planTagPush({
+      tagName: "next-webpack-baseline@0.1.0",
+      workingTreeDirty: false,
+      tagCommit: "abc",
+      headCommit: "abc",
+    }),
+    { action: "push-only", tagName: "next-webpack-baseline@0.1.0" },
+  );
+});
+
+test("작업 트리가 더러우면 태그를 만들지 않는다", () => {
+  assert.equal(
+    planTagPush({
+      tagName: "next-webpack-baseline@0.1.0",
+      workingTreeDirty: true,
+      tagCommit: null,
+      headCommit: "abc",
+    }).action,
+    "abort",
+  );
+});
+
+test("태그가 다른 커밋을 가리키면 태그를 건드리지 않는다", () => {
+  const plan = planTagPush({
+    tagName: "next-webpack-baseline@0.1.0",
+    workingTreeDirty: false,
+    tagCommit: "def",
+    headCommit: "abc",
+  });
+  assert.equal(plan.action, "abort");
+  assert.match(plan.reason, /이미 다른 커밋/);
 });
