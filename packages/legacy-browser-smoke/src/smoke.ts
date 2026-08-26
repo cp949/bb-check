@@ -11,9 +11,11 @@ import type {
 } from "./config.js";
 import { LegacyBrowserSmokeError } from "./errors.js";
 import {
+  finalPathFrom,
   isReadyResult,
   matchKnownUnsupported,
   navigateErrorText,
+  pathMismatchText,
   readyExpression,
   scriptParseSignalText,
   validateLoopbackOrigin,
@@ -297,14 +299,37 @@ const runPage = async (
       page.name,
     );
 
-    // ready 성공과 unsubscribe 사이에는 어떤 await도 두지 않는다 — 이 동기성이
-    // consoleSignals를 그 뒤에 읽어도 race-free임을 보장한다.
+    // ready 시점까지(그리고 대기 중 새로 시작된) Script 요청이 전부 끝나기를
+    // 같은 deadline 안에서 기다린다 — 로딩 중 판정을 구조적으로 막는다.
+    await resourceCollector.waitForScriptSettle(deadline);
+
+    // settle 완료와 unsubscribe 사이에는 어떤 await도 두지 않는다 — 이 동기성이
+    // 수집된 신호를 그 뒤에 읽어도 race-free임을 보장한다.
     unsubscribeConsole();
     unsubscribeException();
     unsubscribeScriptParse();
     const resources = await resourceCollector.finish();
 
-    const allSignals = [...consoleSignals, ...resources.failedRequests];
+    const pathSignals: PageSignal[] = [];
+    if (page.expectedPath !== undefined) {
+      const history: unknown = await pageHandle.session.command(
+        "Page.getNavigationHistory",
+      );
+      const finalPath = finalPathFrom(history, canonicalOrigin);
+      if (finalPath !== page.expectedPath) {
+        pathSignals.push({
+          kind: "path-mismatch",
+          text: pathMismatchText(page.expectedPath, finalPath),
+        });
+      }
+    }
+
+    const allSignals = [
+      ...consoleSignals,
+      ...resources.failedRequests,
+      ...resources.pendingScripts,
+      ...pathSignals,
+    ];
     const { unexpectedSignals, missingKnownUnsupported } =
       matchKnownUnsupported(allSignals, knownUnsupported);
     const status: "pass" | "fail" =

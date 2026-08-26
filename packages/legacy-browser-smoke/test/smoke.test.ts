@@ -1349,4 +1349,158 @@ describe("runSmoke", () => {
       "socket2:send:Page.addScriptToEvaluateOnNewDocument",
     );
   });
+
+  it("ready 후 미완료 Script는 deadline까지 기다렸다가 script-pending 신호로 fail시킨다", async () => {
+    const state = { ready: false };
+    const fixture = smokeFixture({ pageStates: [state] });
+
+    const promise = runSmoke(baseInput(fixture, { pages: [page("home", "/")] }));
+    await reachConnected(fixture);
+    const pageSocket = await attachNextPageSocket(fixture, 1);
+    await waitForFirstPollRegistered(fixture, "socket2", 10);
+
+    pageSocket.deliver({
+      method: "Network.requestWillBeSent",
+      params: {
+        requestId: "s1",
+        type: "Script",
+        request: { url: "http://127.0.0.1/slow.js" },
+      },
+    });
+    state.ready = true;
+    fixture.timers.fire(10);
+    // fire(10)은 tick()을 시작만 시킬 뿐, ready 판정(Runtime.evaluate 왕복)은 여러
+    // microtask를 거쳐 비동기로 끝난다. 공유 deadline(500ms) timer는 attach 시점부터
+    // 이미 pendingAt(500)>=1이므로, 이 microtask 왕복을 먼저 모두 흘려보내지 않으면
+    // ready 판정이 끝나기 전에 500ms를 발화시켜 waitForReady의 (아직 등록된)
+    // deadline listener를 잘못 건드리는 race가 생긴다.
+    await new Promise((resolve) => setImmediate(resolve));
+    // ready는 통과했지만 Script가 미완료라 settle 대기 중 — deadline(500ms)을 만료시킨다.
+    await waitUntil(() => fixture.timers.pendingAt(500) >= 1);
+    fixture.timers.fire(500);
+
+    const report = await promise;
+
+    expect(report.pages[0]).toEqual({
+      name: "home",
+      status: "fail",
+      unexpectedSignals: [{ kind: "script-pending", text: "path=/slow.js" }],
+      missingKnownUnsupported: [],
+    });
+  });
+
+  it("ready 후 Script가 완료되면 deadline 만료 없이 pass한다", async () => {
+    const state = { ready: false };
+    const fixture = smokeFixture({ pageStates: [state] });
+
+    const promise = runSmoke(baseInput(fixture, { pages: [page("home", "/")] }));
+    await reachConnected(fixture);
+    const pageSocket = await attachNextPageSocket(fixture, 1);
+    await waitForFirstPollRegistered(fixture, "socket2", 10);
+
+    pageSocket.deliver({
+      method: "Network.requestWillBeSent",
+      params: {
+        requestId: "s1",
+        type: "Script",
+        request: { url: "http://127.0.0.1/app.js" },
+      },
+    });
+    state.ready = true;
+    fixture.timers.fire(10);
+    pageSocket.deliver({
+      method: "Network.loadingFinished",
+      params: { requestId: "s1" },
+    });
+
+    const report = await promise;
+
+    expect(report.status).toBe("pass");
+  });
+
+  it("expectedPath가 최종 경로와 다르면 path-mismatch 신호로 fail시킨다", async () => {
+    const state = { ready: true };
+    const history = {
+      currentIndex: 1,
+      entries: [
+        { url: "http://127.0.0.1/mypage" },
+        { url: "http://127.0.0.1/login" },
+      ],
+    };
+    const responder: Responder = (message) => {
+      if (message.method === "Page.getNavigationHistory") {
+        return { kind: "result", value: history };
+      }
+      return createPageResponder(state)(message);
+    };
+    const fixture = smokeFixture({ pageResponders: [responder] });
+
+    const promise = runSmoke(
+      baseInput(fixture, {
+        pages: [
+          {
+            name: "my-info",
+            path: "/mypage",
+            expectedPath: "/mypage",
+            ready: { kind: "selector", selector: "#app" },
+          },
+        ],
+      }),
+    );
+    await reachConnected(fixture);
+    await attachNextPageSocket(fixture, 1);
+
+    const report = await promise;
+
+    expect(report.pages[0]).toEqual({
+      name: "my-info",
+      status: "fail",
+      unexpectedSignals: [
+        { kind: "path-mismatch", text: "expected=/mypage; final=/login" },
+      ],
+      missingKnownUnsupported: [],
+    });
+  });
+
+  it("expectedPath가 일치하면 pass하고, 선언이 없으면 getNavigationHistory를 호출하지 않는다", async () => {
+    const state = { ready: true };
+    const history = {
+      currentIndex: 0,
+      entries: [{ url: "http://127.0.0.1/mypage" }],
+    };
+    const responder: Responder = (message) => {
+      if (message.method === "Page.getNavigationHistory") {
+        return { kind: "result", value: history };
+      }
+      return createPageResponder(state)(message);
+    };
+    const secondState = { ready: true };
+    const fixture = smokeFixture({
+      pageResponders: [responder, createPageResponder(secondState)],
+    });
+
+    const report = await (async () => {
+      const promise = runSmoke(
+        baseInput(fixture, {
+          pages: [
+            {
+              name: "my-info",
+              path: "/mypage",
+              expectedPath: "/mypage",
+              ready: { kind: "selector", selector: "#app" },
+            },
+            page("home", "/"),
+          ],
+        }),
+      );
+      await reachConnected(fixture);
+      await attachNextPageSocket(fixture, 1);
+      await attachNextPageSocket(fixture, 2);
+      return promise;
+    })();
+
+    expect(report.status).toBe("pass");
+    expect(fixture.log).toContain("socket2:send:Page.getNavigationHistory");
+    expect(fixture.log).not.toContain("socket3:send:Page.getNavigationHistory");
+  });
 });
