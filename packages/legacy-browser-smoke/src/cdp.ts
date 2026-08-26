@@ -344,3 +344,52 @@ export const connectCdp = async (
 
   return Object.freeze({ command, on, close });
 };
+
+/**
+ * 하나의 마감 시각을 여러 대기자(ready poll, script settle 등)가 공유하는 신호.
+ * 만료 이후 등록된 listener는 동기 즉시 실행되어, 등록 시점과 만료 시점의
+ * race에서 통지를 잃지 않는다.
+ */
+export interface DeadlineSignal {
+  expired(): boolean;
+  /** 만료 시 실행할 listener를 등록하고 해제 함수를 돌려준다. */
+  onExpire(listener: () => void): () => void;
+  /** 예약된 만료를 취소한다. 이후 어떤 listener도 실행되지 않는다. */
+  cancel(): void;
+}
+
+export const startDeadline = (
+  timers: TimerAdapter,
+  delayMs: number,
+): DeadlineSignal => {
+  let expired = false;
+  const listeners = new Set<() => void>();
+  const cancelTimer = timers.schedule(() => {
+    expired = true;
+    for (const listener of [...listeners]) {
+      try {
+        listener();
+      } catch {
+        // 한 listener의 실패가 나머지 만료 통지를 막지 않게 한다.
+      }
+    }
+    listeners.clear();
+  }, delayMs);
+  return Object.freeze({
+    expired: (): boolean => expired,
+    onExpire: (listener: () => void): (() => void) => {
+      if (expired) {
+        listener();
+        return (): void => {};
+      }
+      listeners.add(listener);
+      return (): void => {
+        listeners.delete(listener);
+      };
+    },
+    cancel: (): void => {
+      cancelTimer();
+      listeners.clear();
+    },
+  });
+};
