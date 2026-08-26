@@ -201,6 +201,11 @@ if (report.status !== "pass") process.exitCode = 1;
 const selfTestReport = await smoke.selfTest();
 ```
 
+`run({ origin, signal })`의 `signal`은 진행 중인 실행을 중단한다. 소비자가 만든
+`AbortController`의 signal을 그대로 넘기면 Chromium provisioning과 실행 중인 `run()` 양쪽에
+전달되고, abort되면 package가 기존과 동일하게 browser·session·임시 profile을 정리한다.
+`selfTest()`는 signal을 받지 않는다.
+
 `script-parse` 신호의 text 표현은 `path=<sourcePath>; line=<lineNumber>;
 column=<columnNumber>` 형식이며, 위 예시의 `sourcePath`/`lineNumber`/
 `columnNumber`와 정확히 일치해야 매칭된다.
@@ -261,7 +266,7 @@ exit 1이다. `--help`는 브라우저·네트워크·파일시스템을 전혀 
 | `LBS_ORIGIN_NOT_LOOPBACK`                     | `run`의 `origin`이 loopback http root가 아님                                                                                                     |
 | `LBS_CONNECT_TIMEOUT` / `LBS_COMMAND_TIMEOUT` | CDP 연결 또는 명령 응답 시간 초과                                                                                                                |
 | `LBS_PAGE_NOT_READY`                          | page attach부터 script settle 대기까지 공유하는 `timeoutMs` deadline 안에 `ready` 조건이 참이 되지 않음                                          |
-| `LBS_ABORTED`                                 | (package 내부 전용) 내부 로직이 자체 `AbortSignal`로 중단시킴 — 공개 API(`run`/`selfTest`)는 소비자가 signal을 넘기는 파라미터를 노출하지 않는다 |
+| `LBS_ABORTED`                                 | (package 내부 전용) 내부 로직이 자체 `AbortSignal`로 중단시킴 — `selfTest`는 소비자 signal 파라미터를 노출하지 않는다 |
 
 ## 보안
 

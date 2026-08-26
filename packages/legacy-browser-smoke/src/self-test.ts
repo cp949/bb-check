@@ -28,6 +28,7 @@ export interface LegacyBrowserSmoke {
     readonly executablePath?: string;
     readonly sandbox?: SandboxOption | SandboxDisabledOption;
     readonly injectBeforeNavigate?: string;
+    readonly signal?: AbortSignal;
   }): Promise<SmokeReport>;
   selfTest(options?: {
     readonly executablePath?: string;
@@ -249,10 +250,12 @@ export const createLegacyBrowserSmokeWithAdapters = (
    */
   const resolveExecutable = (
     executablePath: string | undefined,
+    signal?: AbortSignal,
   ): Promise<ChromiumExecutable> =>
-    adapters.ensureChromium(
-      executablePath === undefined ? {} : { executablePath },
-    );
+    adapters.ensureChromium({
+      ...(executablePath === undefined ? {} : { executablePath }),
+      ...(signal === undefined ? {} : { signal }),
+    });
 
   return Object.freeze({
     run: async (options: {
@@ -260,6 +263,7 @@ export const createLegacyBrowserSmokeWithAdapters = (
       readonly executablePath?: string;
       readonly sandbox?: SandboxOption | SandboxDisabledOption;
       readonly injectBeforeNavigate?: string;
+      readonly signal?: AbortSignal;
     }): Promise<SmokeReport> => {
       // origin은 Chromium을 확보하기 전에 검증한다. 오타 하나로 110MB
       // provisioning을 끝낸 뒤에야 LBS_ORIGIN_NOT_LOOPBACK을 만나면 안 된다.
@@ -267,7 +271,10 @@ export const createLegacyBrowserSmokeWithAdapters = (
       // 검증만 하고 원래 origin을 그대로 넘긴다.
       validateLoopbackOrigin(options.origin);
       validateInjectBeforeNavigate(options.injectBeforeNavigate);
-      const executable = await resolveExecutable(options.executablePath);
+      const executable = await resolveExecutable(
+        options.executablePath,
+        options.signal,
+      );
       return adapters.runSmoke({
         origin: options.origin,
         executable,
@@ -282,6 +289,9 @@ export const createLegacyBrowserSmokeWithAdapters = (
         ...(options.injectBeforeNavigate === undefined
           ? {}
           : { injectBeforeNavigate: options.injectBeforeNavigate }),
+        // RunSmokeInput.signal은 `exactOptionalPropertyTypes` 아래 명시적 undefined를
+        // 허용하지 않으므로, 값이 있을 때만 key를 만든다.
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
       });
     },
     selfTest: async (

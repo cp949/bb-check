@@ -348,6 +348,46 @@ describe("createLegacyBrowserSmoke().run", () => {
     expect(Object.hasOwn(inputs[0] ?? {}, "injectBeforeNavigate")).toBe(false);
   });
 
+  it("run은 signal을 ensureChromium과 runSmoke 양쪽에 그대로 전달한다", async () => {
+    const ensureChromium = vi.fn(async () => executable);
+    const inputs: RunSmokeInput[] = [];
+    const smoke = createLegacyBrowserSmokeWithAdapters(consumerConfig, {
+      ensureChromium,
+      runSmoke: async (input) => {
+        inputs.push(input);
+        return consumerReport;
+      },
+    });
+    const controller = new AbortController();
+
+    await smoke.run({
+      origin: "http://127.0.0.1:3000",
+      signal: controller.signal,
+    });
+
+    expect(ensureChromium.mock.calls).toStrictEqual([
+      [{ signal: controller.signal }],
+    ]);
+    expect(inputs[0]?.signal).toBe(controller.signal);
+  });
+
+  it("run은 signal을 생략하면 ensureChromium과 runSmoke 입력에 key를 만들지 않는다", async () => {
+    const ensureChromium = vi.fn(async () => executable);
+    const inputs: RunSmokeInput[] = [];
+    const smoke = createLegacyBrowserSmokeWithAdapters(consumerConfig, {
+      ensureChromium,
+      runSmoke: async (input) => {
+        inputs.push(input);
+        return consumerReport;
+      },
+    });
+
+    await smoke.run({ origin: "http://127.0.0.1:3000" });
+
+    expect(ensureChromium.mock.calls).toStrictEqual([[{}]]);
+    expect(Object.hasOwn(inputs[0] ?? {}, "signal")).toBe(false);
+  });
+
   it("공백뿐인 injectBeforeNavigate는 Chromium 확보 전에 LBS_CONFIG_INVALID다", async () => {
     let provisioned = false;
     const smoke = createLegacyBrowserSmokeWithAdapters(
