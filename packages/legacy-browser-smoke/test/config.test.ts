@@ -319,4 +319,155 @@ describe("defineSmokeConfig", () => {
       expect.objectContaining({ code: "LBS_CONFIG_INVALID" }) as Error,
     );
   });
+
+  it("script-parse known-unsupported는 위치 필드로 선언한다", () => {
+    const config = defineSmokeConfig({
+      pages: [
+        { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+      ],
+      timeoutMs: 1_000,
+      knownUnsupported: [
+        {
+          kind: "script-parse",
+          sourcePath: "/_next/static/chunks/a.js",
+          lineNumber: 0,
+          columnNumber: 0,
+          count: 1,
+          reason: "Chrome 75의 chunk 문법 미지원",
+        },
+      ],
+    });
+
+    expect(config.knownUnsupported).toEqual([
+      {
+        kind: "script-parse",
+        sourcePath: "/_next/static/chunks/a.js",
+        lineNumber: 0,
+        columnNumber: 0,
+        count: 1,
+        reason: "Chrome 75의 chunk 문법 미지원",
+      },
+    ]);
+  });
+
+  it("script-parse의 lineNumber/columnNumber는 0을 허용하고 음수·비정수를 거절한다", () => {
+    const declare = (lineNumber: number, columnNumber: number) =>
+      defineSmokeConfig({
+        pages: [
+          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+        ],
+        timeoutMs: 1_000,
+        knownUnsupported: [
+          {
+            kind: "script-parse",
+            sourcePath: "/a.js",
+            lineNumber,
+            columnNumber,
+            count: 1,
+            reason: "이유",
+          },
+        ],
+      });
+
+    expect(declare(0, 0).knownUnsupported).toHaveLength(1);
+    for (const [line, column] of [
+      [-1, 0],
+      [0, -1],
+      [0.5, 0],
+      [0, Number.NaN],
+    ] as const) {
+      expect(() => declare(line, column)).toThrowError(
+        expect.objectContaining({ code: "LBS_CONFIG_INVALID" }) as Error,
+      );
+    }
+  });
+
+  it("script-parse sourcePath는 page path와 같은 규칙으로 검증된다", () => {
+    expect(() =>
+      defineSmokeConfig({
+        pages: [
+          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+        ],
+        timeoutMs: 1_000,
+        knownUnsupported: [
+          {
+            kind: "script-parse",
+            sourcePath: "http://evil.example/a.js" as `/${string}`,
+            lineNumber: 0,
+            columnNumber: 0,
+            count: 1,
+            reason: "이유",
+          },
+        ],
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: "LBS_CONFIG_INVALID" }) as Error,
+    );
+  });
+
+  it("같은 위치의 script-parse 중복 선언은 거절한다", () => {
+    expect(() =>
+      defineSmokeConfig({
+        pages: [
+          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+        ],
+        timeoutMs: 1_000,
+        knownUnsupported: [
+          {
+            kind: "script-parse",
+            sourcePath: "/a.js",
+            lineNumber: 0,
+            columnNumber: 0,
+            count: 1,
+            reason: "이유",
+          },
+          {
+            kind: "script-parse",
+            sourcePath: "/a.js",
+            lineNumber: 0,
+            columnNumber: 0,
+            count: 2,
+            reason: "다른 이유",
+          },
+        ],
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: "LBS_CONFIG_INVALID" }) as Error,
+    );
+  });
+
+  it("script-pending은 텍스트 pattern known-unsupported로 선언할 수 있다", () => {
+    const config = defineSmokeConfig({
+      pages: [
+        { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+      ],
+      timeoutMs: 1_000,
+      knownUnsupported: [
+        { kind: "script-pending", pattern: "path=/slow.js", count: 1, reason: "이유" },
+      ],
+    });
+
+    expect(config.knownUnsupported?.[0]?.kind).toBe("script-pending");
+  });
+
+  it("path-mismatch는 known-unsupported kind로 선언할 수 없다", () => {
+    expect(() =>
+      defineSmokeConfig({
+        pages: [
+          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+        ],
+        timeoutMs: 1_000,
+        knownUnsupported: [
+          {
+            kind: "path-mismatch",
+            pattern: "expected=/a; final=/b",
+            count: 1,
+            reason: "이유",
+          } as never,
+        ],
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: "LBS_CONFIG_INVALID" }) as Error,
+    );
+  });
 });

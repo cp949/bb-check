@@ -1,5 +1,5 @@
 import { LegacyBrowserSmokeError } from "./errors.js";
-import { normalizeSignalText } from "./signal.js";
+import { normalizeSignalText, scriptParsePatternText } from "./signal.js";
 
 export interface LegacyBrowserSmokeConfig {
   readonly pages: readonly SmokePage[];
@@ -18,12 +18,24 @@ export type ReadyCondition =
   | { readonly kind: "selector"; readonly selector: string }
   | { readonly kind: "expression"; readonly expression: string };
 
-export interface KnownUnsupportedSignal {
-  readonly kind: "console" | "page-error" | "request-failed" | "http-error";
+export interface KnownUnsupportedTextSignal {
+  readonly kind:
+    | "console" | "page-error" | "request-failed" | "http-error" | "script-pending";
   readonly pattern: string;
   readonly count: number;
   readonly reason: string;
 }
+export interface KnownUnsupportedScriptParseSignal {
+  readonly kind: "script-parse";
+  readonly sourcePath: `/${string}`;
+  readonly lineNumber: number;
+  readonly columnNumber: number;
+  readonly count: number;
+  readonly reason: string;
+}
+export type KnownUnsupportedSignal =
+  | KnownUnsupportedTextSignal
+  | KnownUnsupportedScriptParseSignal;
 
 const configInvalid = (): never => {
   throw new LegacyBrowserSmokeError(
@@ -133,6 +145,13 @@ const positiveSafeInteger = (value: unknown): number => {
   return value;
 };
 
+const nonNegativeSafeInteger = (value: unknown): number => {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    return configInvalid();
+  }
+  return value;
+};
+
 const normalizeReady = (value: unknown): ReadyCondition => {
   if (!isOwnDataObject(value)) configInvalid();
   const kindDescriptor = Object.getOwnPropertyDescriptor(
@@ -206,17 +225,44 @@ const normalizePattern = (value: unknown): string => {
 };
 
 const normalizeSignal = (value: unknown): KnownUnsupportedSignal => {
-  const signal = ownData(value, ["kind", "pattern", "count", "reason"]);
-  const kind = signal.kind;
+  if (!isOwnDataObject(value)) configInvalid();
+  const kindDescriptor = Object.getOwnPropertyDescriptor(
+    value as object,
+    "kind",
+  );
+  const kind =
+    kindDescriptor !== undefined && "value" in kindDescriptor
+      ? kindDescriptor.value
+      : configInvalid();
+  if (kind === "script-parse") {
+    const signal = ownData(value, [
+      "kind",
+      "sourcePath",
+      "lineNumber",
+      "columnNumber",
+      "count",
+      "reason",
+    ]);
+    return Object.freeze({
+      kind: "script-parse" as const,
+      sourcePath: normalizePath(signal.sourcePath),
+      lineNumber: nonNegativeSafeInteger(signal.lineNumber),
+      columnNumber: nonNegativeSafeInteger(signal.columnNumber),
+      count: positiveSafeInteger(signal.count),
+      reason: nonEmptyText(signal.reason),
+    });
+  }
   if (
     kind !== "console" &&
     kind !== "page-error" &&
     kind !== "request-failed" &&
-    kind !== "http-error"
+    kind !== "http-error" &&
+    kind !== "script-pending"
   ) {
     configInvalid();
   }
-  const signalKind = kind as KnownUnsupportedSignal["kind"];
+  const signal = ownData(value, ["kind", "pattern", "count", "reason"]);
+  const signalKind = kind as KnownUnsupportedTextSignal["kind"];
   return Object.freeze({
     kind: signalKind,
     pattern: normalizePattern(signal.pattern),
@@ -252,7 +298,10 @@ export const defineSmokeConfig = (
   const signalKeys = new Set<string>();
   for (const rawSignal of rawSignals) {
     const signal = normalizeSignal(rawSignal);
-    const key = `${signal.kind}\u0000${signal.pattern}`;
+    const key =
+      signal.kind === "script-parse"
+        ? `${signal.kind}\u0000${scriptParsePatternText(signal.sourcePath, signal.lineNumber, signal.columnNumber)}`
+        : `${signal.kind}\u0000${signal.pattern}`;
     if (signalKeys.has(key)) configInvalid();
     signalKeys.add(key);
     knownUnsupported.push(signal);
