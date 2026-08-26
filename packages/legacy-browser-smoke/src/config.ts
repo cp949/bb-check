@@ -20,7 +20,11 @@ export type ReadyCondition =
 
 export interface KnownUnsupportedTextSignal {
   readonly kind:
-    | "console" | "page-error" | "request-failed" | "http-error" | "script-pending";
+    | "console"
+    | "page-error"
+    | "request-failed"
+    | "http-error"
+    | "script-pending";
   readonly pattern: string;
   readonly count: number;
   readonly reason: string;
@@ -34,8 +38,7 @@ export interface KnownUnsupportedScriptParseSignal {
   readonly reason: string;
 }
 export type KnownUnsupportedSignal =
-  | KnownUnsupportedTextSignal
-  | KnownUnsupportedScriptParseSignal;
+  KnownUnsupportedTextSignal | KnownUnsupportedScriptParseSignal;
 
 const configInvalid = (): never => {
   throw new LegacyBrowserSmokeError(
@@ -207,7 +210,9 @@ const normalizePage = (value: unknown): SmokePage => {
     ["name", "path", "ready"],
   );
   const expectedPath =
-    page.expectedPath === undefined ? undefined : normalizePath(page.expectedPath);
+    page.expectedPath === undefined
+      ? undefined
+      : normalizePath(page.expectedPath);
   return Object.freeze({
     name: nonEmptyText(page.name),
     path: normalizePath(page.path),

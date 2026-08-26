@@ -289,7 +289,11 @@ describe("defineSmokeConfig", () => {
   it("expectedPath를 생략하면 정규화된 page에 key 자체가 없다", () => {
     const config = defineSmokeConfig({
       pages: [
-        { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+        {
+          name: "home",
+          path: "/",
+          ready: { kind: "selector", selector: "#app" },
+        },
       ],
       timeoutMs: 1_000,
     });
@@ -323,7 +327,11 @@ describe("defineSmokeConfig", () => {
   it("script-parse known-unsupported는 위치 필드로 선언한다", () => {
     const config = defineSmokeConfig({
       pages: [
-        { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+        {
+          name: "home",
+          path: "/",
+          ready: { kind: "selector", selector: "#app" },
+        },
       ],
       timeoutMs: 1_000,
       knownUnsupported: [
@@ -354,7 +362,11 @@ describe("defineSmokeConfig", () => {
     const declare = (lineNumber: number, columnNumber: number) =>
       defineSmokeConfig({
         pages: [
-          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+          {
+            name: "home",
+            path: "/",
+            ready: { kind: "selector", selector: "#app" },
+          },
         ],
         timeoutMs: 1_000,
         knownUnsupported: [
@@ -386,7 +398,11 @@ describe("defineSmokeConfig", () => {
     expect(() =>
       defineSmokeConfig({
         pages: [
-          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+          {
+            name: "home",
+            path: "/",
+            ready: { kind: "selector", selector: "#app" },
+          },
         ],
         timeoutMs: 1_000,
         knownUnsupported: [
@@ -409,7 +425,11 @@ describe("defineSmokeConfig", () => {
     expect(() =>
       defineSmokeConfig({
         pages: [
-          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+          {
+            name: "home",
+            path: "/",
+            ready: { kind: "selector", selector: "#app" },
+          },
         ],
         timeoutMs: 1_000,
         knownUnsupported: [
@@ -439,11 +459,20 @@ describe("defineSmokeConfig", () => {
   it("script-pending은 텍스트 pattern known-unsupported로 선언할 수 있다", () => {
     const config = defineSmokeConfig({
       pages: [
-        { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+        {
+          name: "home",
+          path: "/",
+          ready: { kind: "selector", selector: "#app" },
+        },
       ],
       timeoutMs: 1_000,
       knownUnsupported: [
-        { kind: "script-pending", pattern: "path=/slow.js", count: 1, reason: "이유" },
+        {
+          kind: "script-pending",
+          pattern: "path=/slow.js",
+          count: 1,
+          reason: "이유",
+        },
       ],
     });
 
@@ -454,7 +483,11 @@ describe("defineSmokeConfig", () => {
     expect(() =>
       defineSmokeConfig({
         pages: [
-          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+          {
+            name: "home",
+            path: "/",
+            ready: { kind: "selector", selector: "#app" },
+          },
         ],
         timeoutMs: 1_000,
         knownUnsupported: [

@@ -400,7 +400,11 @@ describe("scriptParseSignalText", () => {
   it("대상 origin 위 URL은 pathname과 위치로 canonical 텍스트를 만든다", () => {
     expect(
       scriptParseSignalText(
-        { url: "http://127.0.0.1:3000/_next/static/chunks/a.js?v=1", startLine: 0, startColumn: 0 },
+        {
+          url: "http://127.0.0.1:3000/_next/static/chunks/a.js?v=1",
+          startLine: 0,
+          startColumn: 0,
+        },
         origin,
       ),
     ).toBe("path=/_next/static/chunks/a.js; line=0; column=0");

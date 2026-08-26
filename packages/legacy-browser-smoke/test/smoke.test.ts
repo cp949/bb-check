@@ -1319,7 +1319,9 @@ describe("runSmoke", () => {
       return promise;
     })();
 
-    const sendLog = fixture.log.filter((line) => line.startsWith("socket2:send:"));
+    const sendLog = fixture.log.filter((line) =>
+      line.startsWith("socket2:send:"),
+    );
     const injectIndex = sendLog.indexOf(
       "socket2:send:Page.addScriptToEvaluateOnNewDocument",
     );
@@ -1329,7 +1331,9 @@ describe("runSmoke", () => {
 
     const injectFrame = fixture.sockets[1]?.sent
       .map((frame) => JSON.parse(frame) as { method: string; params?: object })
-      .find((frame) => frame.method === "Page.addScriptToEvaluateOnNewDocument");
+      .find(
+        (frame) => frame.method === "Page.addScriptToEvaluateOnNewDocument",
+      );
     expect(injectFrame?.params).toEqual({
       source: "localStorage.setItem('k','v')",
     });
@@ -1340,7 +1344,9 @@ describe("runSmoke", () => {
     const state = { ready: true };
     const fixture = smokeFixture({ pageStates: [state] });
 
-    const promise = runSmoke(baseInput(fixture, { pages: [page("home", "/")] }));
+    const promise = runSmoke(
+      baseInput(fixture, { pages: [page("home", "/")] }),
+    );
     await reachConnected(fixture);
     await attachNextPageSocket(fixture, 1);
     await promise;
@@ -1354,7 +1360,9 @@ describe("runSmoke", () => {
     const state = { ready: false };
     const fixture = smokeFixture({ pageStates: [state] });
 
-    const promise = runSmoke(baseInput(fixture, { pages: [page("home", "/")] }));
+    const promise = runSmoke(
+      baseInput(fixture, { pages: [page("home", "/")] }),
+    );
     await reachConnected(fixture);
     const pageSocket = await attachNextPageSocket(fixture, 1);
     await waitForFirstPollRegistered(fixture, "socket2", 10);
@@ -1393,7 +1401,9 @@ describe("runSmoke", () => {
     const state = { ready: false };
     const fixture = smokeFixture({ pageStates: [state] });
 
-    const promise = runSmoke(baseInput(fixture, { pages: [page("home", "/")] }));
+    const promise = runSmoke(
+      baseInput(fixture, { pages: [page("home", "/")] }),
+    );
     await reachConnected(fixture);
     const pageSocket = await attachNextPageSocket(fixture, 1);
     await waitForFirstPollRegistered(fixture, "socket2", 10);

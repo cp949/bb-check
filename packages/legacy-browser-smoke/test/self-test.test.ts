@@ -289,7 +289,11 @@ describe("createLegacyBrowserSmoke().run", () => {
     const smoke = createLegacyBrowserSmokeWithAdapters(
       {
         pages: [
-          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+          {
+            name: "home",
+            path: "/",
+            ready: { kind: "selector", selector: "#app" },
+          },
         ],
         timeoutMs: 1_000,
       },
@@ -318,7 +322,9 @@ describe("createLegacyBrowserSmoke().run", () => {
       injectBeforeNavigate: "localStorage.setItem('k','v')",
     });
 
-    expect(inputs[0]?.injectBeforeNavigate).toBe("localStorage.setItem('k','v')");
+    expect(inputs[0]?.injectBeforeNavigate).toBe(
+      "localStorage.setItem('k','v')",
+    );
   });
 
   it("run은 injectBeforeNavigate를 생략하면 runSmoke 입력에 key를 만들지 않는다", async () => {
@@ -326,7 +332,11 @@ describe("createLegacyBrowserSmoke().run", () => {
     const smoke = createLegacyBrowserSmokeWithAdapters(
       {
         pages: [
-          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+          {
+            name: "home",
+            path: "/",
+            ready: { kind: "selector", selector: "#app" },
+          },
         ],
         timeoutMs: 1_000,
       },
@@ -393,7 +403,11 @@ describe("createLegacyBrowserSmoke().run", () => {
     const smoke = createLegacyBrowserSmokeWithAdapters(
       {
         pages: [
-          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+          {
+            name: "home",
+            path: "/",
+            ready: { kind: "selector", selector: "#app" },
+          },
         ],
         timeoutMs: 1_000,
       },
@@ -406,7 +420,10 @@ describe("createLegacyBrowserSmoke().run", () => {
     );
 
     await expect(
-      smoke.run({ origin: "http://127.0.0.1:3000", injectBeforeNavigate: "  " }),
+      smoke.run({
+        origin: "http://127.0.0.1:3000",
+        injectBeforeNavigate: "  ",
+      }),
     ).rejects.toMatchObject({ code: "LBS_CONFIG_INVALID" });
     expect(provisioned).toBe(false);
   });
@@ -415,7 +432,11 @@ describe("createLegacyBrowserSmoke().run", () => {
     const smoke = createLegacyBrowserSmokeWithAdapters(
       {
         pages: [
-          { name: "home", path: "/", ready: { kind: "selector", selector: "#app" } },
+          {
+            name: "home",
+            path: "/",
+            ready: { kind: "selector", selector: "#app" },
+          },
         ],
         timeoutMs: 1_000,
       },
@@ -435,7 +456,10 @@ describe("createLegacyBrowserSmoke().run", () => {
               name: "legacy-syntax",
               status: "fail",
               unexpectedSignals: [
-                { kind: "page-error", text: "SyntaxError: Unexpected token '.'" },
+                {
+                  kind: "page-error",
+                  text: "SyntaxError: Unexpected token '.'",
+                },
                 {
                   kind: "script-parse",
                   text: "path=/legacy-syntax; line=1; column=0",
