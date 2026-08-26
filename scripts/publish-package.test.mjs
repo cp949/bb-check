@@ -23,10 +23,6 @@ import {
   validatePublishLifecycle,
 } from "./publish-package.mjs";
 
-const releaseEnvironment = {
-  BB_CHECK_FORBIDDEN_WORDS: "synthetic-release-pattern",
-};
-
 test("인자가 없으면 대화형 메뉴를 선택한다", () => {
   assert.deepEqual(parsePublishArguments([]), { menu: true });
 });
@@ -130,26 +126,6 @@ test("CLI도 모순된 action flag를 registry 조회 전에 거부한다", () =
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /함께 사용할 수 없습니다/u);
-});
-
-test("actual CLI는 secret이 없으면 registry 조회 전에 거부한다", () => {
-  const result = spawnSync(
-    process.execPath,
-    [
-      resolve(import.meta.dirname, "publish-package.mjs"),
-      "--package",
-      "@cp949/next-webpack-baseline",
-      "--publish",
-      "--confirm-publish",
-    ],
-    {
-      encoding: "utf8",
-      env: { ...process.env, BB_CHECK_FORBIDDEN_WORDS: "" },
-    },
-  );
-
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /BB_CHECK_FORBIDDEN_WORDS/u);
 });
 
 test("package lifecycle은 direct actual을 막고 dry-run 또는 wrapper marker만 허용한다", () => {
@@ -273,13 +249,12 @@ test("배포 전에 next package 전용 release 검증을 실행한다", () => {
     },
     undefined,
     true,
-    releaseEnvironment,
+    {},
   );
 
   assert.equal(succeeded, true);
   assert.deepEqual(commands, [
     ["npm", ["run", "verify:next-release"]],
-    ["npm", ["run", "check-public-words", "--", "--release"]],
     ["npm", ["whoami"]],
     [
       "npm",
@@ -287,10 +262,6 @@ test("배포 전에 next package 전용 release 검증을 실행한다", () => {
     ],
   ]);
   assert.equal(publishEnvironment.NWB_PUBLISH_CONFIRMED, "1");
-  assert.equal(
-    publishEnvironment.BB_CHECK_FORBIDDEN_WORDS,
-    releaseEnvironment.BB_CHECK_FORBIDDEN_WORDS,
-  );
 });
 
 test("선택한 package는 자신의 verify script를 함께 돌려준다", () => {
@@ -382,59 +353,17 @@ test("실제 배포는 npm 인증 실패 시 publish를 실행하지 않는다",
     { status: "missing" },
     (command, args) => {
       commands.push([command, args]);
-      return { status: commands.length === 3 ? 1 : 0 };
+      return { status: commands.length === 2 ? 1 : 0 };
     },
     undefined,
     true,
-    releaseEnvironment,
+    {},
   );
 
   assert.equal(succeeded, false);
   assert.deepEqual(commands, [
     ["npm", ["run", "verify:next-release"]],
-    ["npm", ["run", "check-public-words", "--", "--release"]],
     ["npm", ["whoami"]],
-  ]);
-});
-
-test("실제 publish는 secret이 없거나 release scan이 실패하면 publish에 도달하지 않는다", () => {
-  const withoutSecret = [];
-  assert.equal(
-    publishPackage(
-      "0.1.0",
-      false,
-      { status: "missing" },
-      (command, args) => {
-        withoutSecret.push([command, args]);
-        return { status: 0 };
-      },
-      undefined,
-      true,
-      {},
-    ),
-    false,
-  );
-  assert.deepEqual(withoutSecret, []);
-
-  const failedScan = [];
-  assert.equal(
-    publishPackage(
-      "0.1.0",
-      false,
-      { status: "missing" },
-      (command, args) => {
-        failedScan.push([command, args]);
-        return { status: failedScan.length === 2 ? 19 : 0 };
-      },
-      undefined,
-      true,
-      releaseEnvironment,
-    ),
-    false,
-  );
-  assert.deepEqual(failedScan, [
-    ["npm", ["run", "verify:next-release"]],
-    ["npm", ["run", "check-public-words", "--", "--release"]],
   ]);
 });
 

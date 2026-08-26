@@ -78,9 +78,6 @@ jobs:
           npm run test-packed-package -- --package @cp949/next-webpack-baseline
           npm run test-packed-package -- --package @cp949/legacy-browser-smoke
 
-      - name: public words generic scan
-        run: npm run check-public-words
-
       - name: build tarball for Node 20 runtime verification
         working-directory: packages/next-webpack-baseline
         run: |

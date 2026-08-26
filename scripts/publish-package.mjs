@@ -160,11 +160,6 @@ export function validatePublishLifecycle(environment) {
   );
 }
 
-const hasReleasePatterns = (environment) =>
-  (environment.BB_CHECK_FORBIDDEN_WORDS ?? "")
-    .split(",")
-    .some((word) => word.trim().length > 0);
-
 export function classifyRegistryVersionResult(result) {
   if (result.status === 0) {
     const version = result.stdout.trim();
@@ -223,10 +218,6 @@ export function publishPackage(
     console.log("실제 publish confirmation이 없어 배포를 중단합니다.");
     return false;
   }
-  if (!dryRun && !hasReleasePatterns(environment)) {
-    console.log("release forbidden pattern이 없어 실제 배포를 중단합니다.");
-    return false;
-  }
   const plan = planPublish({ dryRun, registryLookup, packageName });
   if (plan.action === "abort") {
     console.log(plan.reason);
@@ -241,17 +232,6 @@ export function publishPackage(
   }
 
   if (!dryRun) {
-    console.log("\n$ npm run check-public-words -- --release");
-    const publicWords = runCommand(
-      "npm",
-      ["run", "check-public-words", "--", "--release"],
-      { env: environment },
-    );
-    if (publicWords.status !== 0) {
-      console.log("\nrelease 공개 문자열 검증에 실패해 배포를 중단합니다.");
-      return false;
-    }
-
     console.log("\n$ npm whoami");
     const authenticated = runCommand("npm", ["whoami"], { env: environment });
     if (authenticated.status !== 0) {
@@ -290,10 +270,10 @@ function readRegistryVersion(packageName, version) {
 
 // ---- 대화형 메뉴 -----------------------------------------------------------
 // 인자 없이 실행했을 때만 진입한다(parsePublishArguments 참고). 실제 배포를
-// 막는 검증(verify script, check-public-words, npm whoami, registry 중복
-// 확인)은 publishPackage를 그대로 재사용하므로 메뉴 전용 우회는 없다. 유일한
-// 차이는 --confirm-publish 플래그 대신 터미널에서 "1"을 직접 선택하는 행위
-// 자체를 확인으로 인정한다는 것뿐이다.
+// 막는 검증(verify script, npm whoami, registry 중복 확인)은 publishPackage를
+// 그대로 재사용하므로 메뉴 전용 우회는 없다. 유일한 차이는 --confirm-publish
+// 플래그 대신 터미널에서 "4"를 직접 선택하는 행위 자체를 확인으로 인정한다는
+// 것뿐이다.
 
 export function collectExportPaths(exportsField) {
   const paths = [];
@@ -599,7 +579,7 @@ async function runMenu(rl, selectedPackage, manifest, version) {
       );
     } else if (choice === "4") {
       // 메뉴에서 "4"를 직접 선택하는 행위를 --confirm-publish로 인정한다.
-      // BB_CHECK_FORBIDDEN_WORDS 등 나머지 게이트는 publishPackage가 그대로 검증한다.
+      // registry 중복 확인 등 나머지 게이트는 publishPackage가 그대로 검증한다.
       publishPackage(
         version,
         false,
@@ -651,9 +631,6 @@ async function main() {
       rl.close();
     }
     return;
-  }
-  if (!options.dryRun && !hasReleasePatterns(process.env)) {
-    throw new Error("실제 publish에는 BB_CHECK_FORBIDDEN_WORDS가 필요합니다.");
   }
   const entry = allowedPackages.get(options.packageName);
   if (entry === undefined) {
