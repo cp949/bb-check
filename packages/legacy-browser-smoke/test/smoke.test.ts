@@ -1224,4 +1224,129 @@ describe("runSmoke", () => {
     const report = await promise;
     expect(report.status).toBe("pass");
   });
+
+  it("Debugger.scriptFailedToParse는 script-parse 신호가 되어 페이지를 fail시킨다", async () => {
+    const state = { ready: false };
+    const fixture = smokeFixture({ pageStates: [state] });
+
+    const promise = runSmoke(
+      baseInput(fixture, { pages: [page("home", "/")] }),
+    );
+
+    await reachConnected(fixture);
+    const pageSocket = await attachNextPageSocket(fixture, 1);
+    await waitForFirstPollRegistered(fixture, "socket2", 10);
+
+    pageSocket.deliver({
+      method: "Debugger.scriptFailedToParse",
+      params: {
+        url: "http://127.0.0.1/_next/static/chunks/a.js",
+        startLine: 0,
+        startColumn: 0,
+      },
+    });
+    state.ready = true;
+    fixture.timers.fire(10);
+
+    const report = await promise;
+
+    expect(fixture.log).toContain("socket2:send:Debugger.enable");
+    expect(report.pages[0]).toEqual({
+      name: "home",
+      status: "fail",
+      unexpectedSignals: [
+        {
+          kind: "script-parse",
+          text: "path=/_next/static/chunks/a.js; line=0; column=0",
+        },
+      ],
+      missingKnownUnsupported: [],
+    });
+  });
+
+  it("script-parse 신호는 위치 기반 known-unsupported 선언으로 흡수된다", async () => {
+    const state = { ready: false };
+    const fixture = smokeFixture({ pageStates: [state] });
+
+    const promise = runSmoke(
+      baseInput(fixture, {
+        pages: [page("home", "/")],
+        knownUnsupported: [
+          {
+            kind: "script-parse",
+            sourcePath: "/_next/static/chunks/a.js",
+            lineNumber: 0,
+            columnNumber: 0,
+            count: 1,
+            reason: "Chrome 75의 chunk 문법 미지원",
+          },
+        ],
+      }),
+    );
+
+    await reachConnected(fixture);
+    const pageSocket = await attachNextPageSocket(fixture, 1);
+    await waitForFirstPollRegistered(fixture, "socket2", 10);
+    pageSocket.deliver({
+      method: "Debugger.scriptFailedToParse",
+      params: {
+        url: "http://127.0.0.1/_next/static/chunks/a.js",
+        startLine: 0,
+        startColumn: 0,
+      },
+    });
+    state.ready = true;
+    fixture.timers.fire(10);
+
+    const report = await promise;
+
+    expect(report.status).toBe("pass");
+  });
+
+  it("injectBeforeNavigate는 Page.navigate 전에 addScriptToEvaluateOnNewDocument로 등록된다", async () => {
+    const state = { ready: true };
+    const fixture = smokeFixture({ pageStates: [state] });
+
+    const report = await (async () => {
+      const promise = runSmoke(
+        baseInput(fixture, {
+          pages: [page("home", "/")],
+          injectBeforeNavigate: "localStorage.setItem('k','v')",
+        }),
+      );
+      await reachConnected(fixture);
+      await attachNextPageSocket(fixture, 1);
+      return promise;
+    })();
+
+    const sendLog = fixture.log.filter((line) => line.startsWith("socket2:send:"));
+    const injectIndex = sendLog.indexOf(
+      "socket2:send:Page.addScriptToEvaluateOnNewDocument",
+    );
+    const navigateIndex = sendLog.indexOf("socket2:send:Page.navigate");
+    expect(injectIndex).toBeGreaterThanOrEqual(0);
+    expect(injectIndex).toBeLessThan(navigateIndex);
+
+    const injectFrame = fixture.sockets[1]?.sent
+      .map((frame) => JSON.parse(frame) as { method: string; params?: object })
+      .find((frame) => frame.method === "Page.addScriptToEvaluateOnNewDocument");
+    expect(injectFrame?.params).toEqual({
+      source: "localStorage.setItem('k','v')",
+    });
+    expect(report.status).toBe("pass");
+  });
+
+  it("injectBeforeNavigate가 없으면 addScriptToEvaluateOnNewDocument를 호출하지 않는다", async () => {
+    const state = { ready: true };
+    const fixture = smokeFixture({ pageStates: [state] });
+
+    const promise = runSmoke(baseInput(fixture, { pages: [page("home", "/")] }));
+    await reachConnected(fixture);
+    await attachNextPageSocket(fixture, 1);
+    await promise;
+
+    expect(fixture.log).not.toContain(
+      "socket2:send:Page.addScriptToEvaluateOnNewDocument",
+    );
+  });
 });

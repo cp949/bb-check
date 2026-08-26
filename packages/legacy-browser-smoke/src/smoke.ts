@@ -15,6 +15,7 @@ import {
   matchKnownUnsupported,
   navigateErrorText,
   readyExpression,
+  scriptParseSignalText,
   validateLoopbackOrigin,
 } from "./page-contract.js";
 import type { ChromiumExecutable } from "./preflight.js";
@@ -54,6 +55,8 @@ export interface RunSmokeInput {
   readonly runtime?: BrowserRuntimeRunner;
   readonly timers?: TimerAdapter;
   readonly readyPollIntervalMs?: number;
+  /** 각 page navigate 전에 새 문서 컨텍스트에 등록할 스크립트 소스. */
+  readonly injectBeforeNavigate?: string;
 }
 
 export interface SmokePageResult {
@@ -126,6 +129,15 @@ const createExceptionListener =
     consoleSignals.push({
       kind: "page-error",
       text: normalizeSignalText(description),
+    });
+  };
+
+const createScriptParseListener =
+  (signals: PageSignal[], canonicalOrigin: string) =>
+  (params: object): void => {
+    signals.push({
+      kind: "script-parse",
+      text: scriptParseSignalText(params, canonicalOrigin),
     });
   };
 
@@ -214,6 +226,7 @@ const runPage = async (
   timers: TimerAdapter,
   readyPollIntervalMs: number,
   knownUnsupported: readonly KnownUnsupportedSignal[],
+  injectBeforeNavigate: string | undefined,
 ): Promise<SmokePageResult> => {
   const deadline = startDeadline(timers, timeoutMs);
   let pageHandle: PageHandle;
@@ -229,9 +242,13 @@ const runPage = async (
   const consoleSignals: PageSignal[] = [];
   let unsubscribeConsole: (() => void) | undefined;
   let unsubscribeException: (() => void) | undefined;
+  let unsubscribeScriptParse: (() => void) | undefined;
   try {
     resourceCollector = await beginPageResourceCollection(pageHandle.session);
     await pageHandle.session.command("Runtime.enable");
+    // 선언 유무와 무관하게 항상 켠다 — Chrome 75에서 외부 스크립트 구문 실패는
+    // Runtime.exceptionThrown이 아니라 Debugger.scriptFailedToParse로만 온다.
+    await pageHandle.session.command("Debugger.enable");
     unsubscribeConsole = pageHandle.session.on(
       "Runtime.consoleAPICalled",
       ignoreMalformedEvent(createConsoleListener(consoleSignals)),
@@ -240,6 +257,19 @@ const runPage = async (
       "Runtime.exceptionThrown",
       ignoreMalformedEvent(createExceptionListener(consoleSignals)),
     );
+    unsubscribeScriptParse = pageHandle.session.on(
+      "Debugger.scriptFailedToParse",
+      ignoreMalformedEvent(
+        createScriptParseListener(consoleSignals, canonicalOrigin),
+      ),
+    );
+
+    if (injectBeforeNavigate !== undefined) {
+      await pageHandle.session.command(
+        "Page.addScriptToEvaluateOnNewDocument",
+        { source: injectBeforeNavigate },
+      );
+    }
 
     const url = `${canonicalOrigin}${page.path}`;
     const navigated = await pageHandle.session.command("Page.navigate", {
@@ -271,6 +301,7 @@ const runPage = async (
     // consoleSignals를 그 뒤에 읽어도 race-free임을 보장한다.
     unsubscribeConsole();
     unsubscribeException();
+    unsubscribeScriptParse();
     const resources = await resourceCollector.finish();
 
     const allSignals = [...consoleSignals, ...resources.failedRequests];
@@ -291,6 +322,7 @@ const runPage = async (
     resourceCollector?.dispose();
     unsubscribeConsole?.();
     unsubscribeException?.();
+    unsubscribeScriptParse?.();
     await pageHandle.close();
   }
 };
@@ -326,6 +358,7 @@ export const runSmoke = async (input: RunSmokeInput): Promise<SmokeReport> => {
           timers,
           readyPollIntervalMs,
           input.knownUnsupported,
+          input.injectBeforeNavigate,
         );
         pages.push(result);
       }
