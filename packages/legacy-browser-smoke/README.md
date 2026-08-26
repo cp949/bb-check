@@ -250,22 +250,22 @@ exit 1이다. `--help`는 브라우저·네트워크·파일시스템을 전혀 
 
 ## 오류 코드
 
-| 코드                                          | 의미                                                                                                                                             |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `LBS_CONFIG_INVALID`                          | `defineSmokeConfig`/`sandbox`/`injectBeforeNavigate` 옵션 형식 오류                                                                              |
-| `LBS_NODE_UNSUPPORTED`                        | Node 22 미만에서 Chromium provisioning 시도                                                                                                      |
-| `LBS_PLATFORM_UNSUPPORTED`                    | Linux x64가 아닌 플랫폼                                                                                                                          |
-| `LBS_CACHE_IO`                                | cache 경로 계산·생성 실패, 또는 설치된 package 디렉터리를 cache로 지정                                                                           |
-| `LBS_PROVISION_LOCK_TIMEOUT`                  | provisioning lock 대기 시간 초과(다른 프로세스가 보유 중이거나 stale)                                                                            |
-| `LBS_DOWNLOAD_FAILED`                         | archive 다운로드 실패(비-HTTPS URL 포함)                                                                                                         |
-| `LBS_ARCHIVE_UNSAFE` / `LBS_ARCHIVE_INVALID`  | archive 항목이 안전하지 않거나 형식이 예상과 다름                                                                                                |
-| `LBS_CHECKSUM_MISMATCH`                       | 다운로드한 archive의 SHA-256이 registry 값과 불일치                                                                                              |
-| `LBS_BROWSER_EXECUTABLE_INVALID`              | `executablePath`가 실행 가능한 일반 파일이 아님(symlink 포함 거부)                                                                               |
-| `LBS_BROWSER_VERSION_MISMATCH`                | 지정한 실행 파일의 버전이 고정 버전과 다름                                                                                                       |
-| `LBS_SANDBOX_UNAVAILABLE`                     | root에서 sandbox 필수 모드로 실행 시도                                                                                                           |
-| `LBS_ORIGIN_NOT_LOOPBACK`                     | `run`의 `origin`이 loopback http root가 아님                                                                                                     |
-| `LBS_CONNECT_TIMEOUT` / `LBS_COMMAND_TIMEOUT` | CDP 연결 또는 명령 응답 시간 초과                                                                                                                |
-| `LBS_PAGE_NOT_READY`                          | page attach부터 script settle 대기까지 공유하는 `timeoutMs` deadline 안에 `ready` 조건이 참이 되지 않음                                          |
+| 코드                                          | 의미                                                                                                                                                                           |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `LBS_CONFIG_INVALID`                          | `defineSmokeConfig`/`sandbox`/`injectBeforeNavigate` 옵션 형식 오류                                                                                                            |
+| `LBS_NODE_UNSUPPORTED`                        | Node 22 미만에서 Chromium provisioning 시도                                                                                                                                    |
+| `LBS_PLATFORM_UNSUPPORTED`                    | Linux x64가 아닌 플랫폼                                                                                                                                                        |
+| `LBS_CACHE_IO`                                | cache 경로 계산·생성 실패, 또는 설치된 package 디렉터리를 cache로 지정                                                                                                         |
+| `LBS_PROVISION_LOCK_TIMEOUT`                  | provisioning lock 대기 시간 초과(다른 프로세스가 보유 중이거나 stale)                                                                                                          |
+| `LBS_DOWNLOAD_FAILED`                         | archive 다운로드 실패(비-HTTPS URL 포함)                                                                                                                                       |
+| `LBS_ARCHIVE_UNSAFE` / `LBS_ARCHIVE_INVALID`  | archive 항목이 안전하지 않거나 형식이 예상과 다름                                                                                                                              |
+| `LBS_CHECKSUM_MISMATCH`                       | 다운로드한 archive의 SHA-256이 registry 값과 불일치                                                                                                                            |
+| `LBS_BROWSER_EXECUTABLE_INVALID`              | `executablePath`가 실행 가능한 일반 파일이 아님(symlink 포함 거부)                                                                                                             |
+| `LBS_BROWSER_VERSION_MISMATCH`                | 지정한 실행 파일의 버전이 고정 버전과 다름                                                                                                                                     |
+| `LBS_SANDBOX_UNAVAILABLE`                     | root에서 sandbox 필수 모드로 실행 시도                                                                                                                                         |
+| `LBS_ORIGIN_NOT_LOOPBACK`                     | `run`의 `origin`이 loopback http root가 아님                                                                                                                                   |
+| `LBS_CONNECT_TIMEOUT` / `LBS_COMMAND_TIMEOUT` | CDP 연결 또는 명령 응답 시간 초과                                                                                                                                              |
+| `LBS_PAGE_NOT_READY`                          | page attach부터 script settle 대기까지 공유하는 `timeoutMs` deadline 안에 `ready` 조건이 참이 되지 않음                                                                        |
 | `LBS_ABORTED`                                 | `run`에 전달한 `signal`이 abort되거나 내부 로직이 자체 `AbortSignal`로 중단시킴 — `selfTest`는 소비자 signal 파라미터를 노출하지 않으므로 이 코드가 소비자에게 나타나지 않는다 |
 
 ## 보안
