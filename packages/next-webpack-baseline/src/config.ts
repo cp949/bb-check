@@ -7,16 +7,23 @@ import type {
   NextWebpackBaselineConfig,
   PackagePolicy,
   PackageWaiver,
+  UnlistedPackagesMode,
 } from "./index.js";
 
 export interface NormalizedConfig {
   readonly projectDir: string;
   readonly policyByPackage: ReadonlyMap<string, PackagePolicy>;
   readonly waiversByPackage: ReadonlyMap<string, readonly PackageWaiver[]>;
+  readonly unlistedPackages: UnlistedPackagesMode;
 }
 
 const npmPackageName =
   /^(?:@(?:[a-z0-9][a-z0-9._-]*)\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u;
+
+const isUnlistedPackagesMode = (
+  value: unknown,
+): value is UnlistedPackagesMode =>
+  value === "ignore" || value === "warn" || value === "error";
 
 const invalid = (message: string): never => {
   throw new NextWebpackBaselineError(
@@ -176,7 +183,34 @@ const normalizeWaiver = (value: unknown, label: string): PackageWaiver => {
 export const normalizeConfig = (input: unknown): NormalizedConfig => {
   if (!isPlainObject(input))
     return invalid("config는 plain object여야 합니다.");
-  assertOnlyKeys(input, ["projectDir", "policy", "waivers"], "config");
+  assertOnlyKeys(
+    input,
+    ["projectDir", "policy", "waivers", "unlistedPackages"],
+    "config",
+  );
+
+  const unlistedPackagesField = readOwnProperty(input, "unlistedPackages");
+  let unlistedPackages: unknown;
+  switch (unlistedPackagesField.kind) {
+    case "absent":
+      unlistedPackages = "warn";
+      break;
+    case "accessor":
+      invalid("config.unlistedPackages은(는) own data property여야 합니다.");
+      break;
+    case "value":
+      unlistedPackages =
+        unlistedPackagesField.value === undefined
+          ? "warn"
+          : unlistedPackagesField.value;
+      break;
+  }
+  if (!isUnlistedPackagesMode(unlistedPackages)) {
+    return invalid(
+      'config.unlistedPackages은(는) "ignore", "warn", "error" 중 하나여야 합니다.',
+    );
+  }
+  const normalizedUnlistedPackages = unlistedPackages;
 
   const projectDir = readRequiredData(input, "projectDir", "config.projectDir");
   if (typeof projectDir !== "string")
@@ -254,6 +288,7 @@ export const normalizeConfig = (input: unknown): NormalizedConfig => {
       ]),
     ),
     waiversByPackage: detachedWaiversByPackage,
+    unlistedPackages: normalizedUnlistedPackages,
   };
 };
 

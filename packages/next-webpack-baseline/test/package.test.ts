@@ -19,6 +19,7 @@ const readManifest = async () =>
     ),
   ) as {
     name: string;
+    version: string;
     private?: boolean;
     license: string;
     engines: { node: string };
@@ -28,9 +29,17 @@ const readManifest = async () =>
 
 describe("@cp949/next-webpack-baseline 공개 package 계약", () => {
   it("공개 config type은 빈 policy의 중립 사용 예를 허용한다", () => {
-    const config = defineConfig({ projectDir: packageDir, policy: [] });
+    const config = defineConfig({
+      projectDir: packageDir,
+      policy: [],
+      unlistedPackages: "error" as const,
+    });
 
-    expect(config).toEqual({ projectDir: packageDir, policy: [] });
+    expect(config).toEqual({
+      projectDir: packageDir,
+      policy: [],
+      unlistedPackages: "error",
+    });
   });
 
   it("모든 내부 factory를 정확한 두 key의 공개 facade로 결합한다", () => {
@@ -53,6 +62,7 @@ describe("@cp949/next-webpack-baseline 공개 package 계약", () => {
     const manifest = await readManifest();
 
     expect(manifest.name).toBe("@cp949/next-webpack-baseline");
+    expect(manifest.version).toBe("0.2.0");
     expect(manifest.private).not.toBe(true);
     expect(manifest.license).toBe("MIT");
     expect(manifest.engines.node).toBe(">=20");
@@ -181,11 +191,12 @@ describe("@cp949/next-webpack-baseline 공개 package 계약", () => {
       await writeFile(
         join(consumerDir, "consumer.ts"),
         [
-          'import { createNextWebpackBaseline, defineConfig, type NextWebpackBaselineConfig, type PackagePolicy, type PackageWaiver } from "@cp949/next-webpack-baseline";',
+          'import { createNextWebpackBaseline, defineConfig, type NextWebpackBaselineConfig, type PackagePolicy, type PackageWaiver, type UnlistedPackagesMode } from "@cp949/next-webpack-baseline";',
           "",
           'const policy: PackagePolicy = { package: "example-package", reason: "legacy syntax check" };',
           'const waiver: PackageWaiver = { package: "example-package", reason: "reviewed entrypoint", allowedEntrypoints: ["dist/index.js"] };',
-          `const input: NextWebpackBaselineConfig = { projectDir: ${JSON.stringify(legacyProjectDir)}, policy: [policy], waivers: [waiver] };`,
+          'const unlistedPackages: UnlistedPackagesMode = "error";',
+          `const input: NextWebpackBaselineConfig = { projectDir: ${JSON.stringify(legacyProjectDir)}, policy: [policy], waivers: [waiver], unlistedPackages };`,
           "const facade = createNextWebpackBaseline(defineConfig(input));",
           "const packages: readonly string[] = facade.transpilePackages;",
           "const plugin: { apply(compiler: { readonly hooks: object }): void } = facade.webpackPlugin({ dev: false });",

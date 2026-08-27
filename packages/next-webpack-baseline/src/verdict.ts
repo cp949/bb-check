@@ -1,26 +1,18 @@
 import type { NormalizedConfig } from "./config.js";
-import { isDownlevelPackage } from "./downlevel.js";
-import {
-  assertResourceShape,
-  isBarrelOptimizeResource,
-  isProvenOrdinaryAppResource,
-  resolvePackageResource,
-} from "./package-name.js";
 import type { PackageResource } from "./package-name.js";
 import type { SyntaxAnalysis, SyntaxDiagnostic } from "./syntax.js";
-import { validateWaivers } from "./waiver.js";
+import { hasExactWaiver, validateWaivers } from "./waiver.js";
 
-export interface ModuleVerdict {
-  readonly status: "ignored" | "pass" | "waived" | "fail";
-  readonly resource?: PackageResource;
+export interface RegisteredModuleVerdict {
+  readonly status: "pass" | "waived" | "fail";
+  readonly resource: PackageResource;
   readonly diagnostics: readonly SyntaxDiagnostic[];
 }
 
-export interface CreateVerdictInput {
+export interface CreateRegisteredVerdictInput {
   readonly config: NormalizedConfig;
-  readonly resource: string;
+  readonly resource: PackageResource;
   readonly syntax: SyntaxAnalysis;
-  readonly isClientEntryReachable: boolean;
 }
 
 const compareDiagnostics = (
@@ -45,47 +37,24 @@ const sortedDiagnostics = (
         },
   );
 
-/** validateWaivers 이후에만 사용하는 exact matcher라 caller가 validation을 우회할 수 없다. */
-const hasExactWaiver = (
-  config: NormalizedConfig,
-  resource: PackageResource,
-): boolean =>
-  (config.waiversByPackage.get(resource.package) ?? []).some((waiver) =>
-    waiver.allowedEntrypoints.includes(resource.entrypoint),
-  );
-
-/** module resource, client graph, syntax 결과를 정책과 waiver에 따라 하나의 안정된 verdict로 결합한다. */
-export const createVerdict = (input: CreateVerdictInput): ModuleVerdict => {
+/** 분류가 끝난 등록 package의 syntax와 exact waiver만 판정한다. */
+export const createRegisteredVerdict = (
+  input: CreateRegisteredVerdictInput,
+): RegisteredModuleVerdict => {
   validateWaivers(input.config.waiversByPackage);
-  if (isBarrelOptimizeResource(input.resource)) {
-    return { status: "ignored", diagnostics: [] };
-  }
-  assertResourceShape(input.resource);
-  if (isProvenOrdinaryAppResource(input.resource)) {
-    return { status: "ignored", diagnostics: [] };
-  }
-
-  const resource: PackageResource = resolvePackageResource(input.resource);
-  if (!input.isClientEntryReachable) {
-    return { status: "ignored", diagnostics: [] };
-  }
-  if (!isDownlevelPackage(input.config, resource)) {
-    return { status: "ignored", resource, diagnostics: [] };
-  }
-
   const diagnostics = sortedDiagnostics(input.syntax.diagnostics);
   if (diagnostics.length === 0) {
-    return { status: "pass", resource, diagnostics };
+    return { status: "pass", resource: input.resource, diagnostics };
   }
   if (
     diagnostics.some(
       (diagnostic) => diagnostic.code === "NWB_SYNTAX_PARSE_INCOMPLETE",
     )
   ) {
-    return { status: "fail", resource, diagnostics };
+    return { status: "fail", resource: input.resource, diagnostics };
   }
-  if (hasExactWaiver(input.config, resource)) {
-    return { status: "waived", resource, diagnostics };
+  if (hasExactWaiver(input.config.waiversByPackage, input.resource)) {
+    return { status: "waived", resource: input.resource, diagnostics };
   }
-  return { status: "fail", resource, diagnostics };
+  return { status: "fail", resource: input.resource, diagnostics };
 };

@@ -6,6 +6,54 @@ import { NextWebpackBaselineError } from "../src/errors.js";
 const projectDir = resolve("test-project");
 
 describe("normalizeConfig", () => {
+  it("unlistedPackages 생략값을 warn으로 정상화한다", () => {
+    const normalized = normalizeConfig({ projectDir, policy: [] });
+
+    expect(normalized.unlistedPackages).toBe("warn");
+  });
+
+  it.each(["ignore", "warn", "error"] as const)(
+    "unlistedPackages=%s를 그대로 정상화한다",
+    (unlistedPackages) => {
+      const normalized = normalizeConfig({
+        projectDir,
+        policy: [],
+        unlistedPackages,
+      });
+
+      expect(normalized.unlistedPackages).toBe(unlistedPackages);
+    },
+  );
+
+  it.each(["silent", true, 1, null])(
+    "알 수 없는 unlistedPackages 값 %s를 NWB_CONFIG_INVALID로 거부한다",
+    (unlistedPackages) => {
+      expect(() =>
+        normalizeConfig({ projectDir, policy: [], unlistedPackages }),
+      ).toThrow(
+        expect.objectContaining<Partial<NextWebpackBaselineError>>({
+          code: "NWB_CONFIG_INVALID",
+        }),
+      );
+    },
+  );
+
+  it("unlistedPackages accessor를 실행하지 않고 NWB_CONFIG_INVALID로 거부한다", () => {
+    const input = { projectDir, policy: [] };
+    Object.defineProperty(input, "unlistedPackages", {
+      enumerable: true,
+      get: () => {
+        throw new Error("unlisted mode getter sentinel");
+      },
+    });
+
+    expect(() => normalizeConfig(input)).toThrow(
+      expect.objectContaining<Partial<NextWebpackBaselineError>>({
+        code: "NWB_CONFIG_INVALID",
+      }),
+    );
+  });
+
   it("상대 projectDir와 policy 및 waiver를 독립된 판정용 값으로 정상화한다", () => {
     const normalized = normalizeConfig({
       projectDir: "test-project",

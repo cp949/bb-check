@@ -14,7 +14,7 @@ Next.js 프로덕션 빌드가 오래된 브라우저에서 실제로 열리는�
 
 | 패키지                         | 하는 일                                                                  | 실행 시점     |
 | ------------------------------ | ------------------------------------------------------------------------ | ------------- |
-| `@cp949/next-webpack-baseline` | Webpack 빌드 결과에 지원 대상보다 새 JavaScript 문법이 남았는지 검사한다 | 개발·빌드     |
+| `@cp949/next-webpack-baseline` | policy 등록 package 이행을 검증하고 production 미등록 package를 관찰한다 | 개발·빌드     |
 | `@cp949/legacy-browser-smoke`  | 고정된 Chromium 75로 실제 페이지를 열어 로드 실패와 실행 오류를 검사한다 | 빌드 후 smoke |
 
 첫 번째는 정적 검사이고, 두 번째는 실제 구형 브라우저로 하는 최종 확인이다. 하나가
@@ -39,12 +39,12 @@ npm install -D @cp949/next-webpack-baseline @cp949/legacy-browser-smoke
 
 ## 저장소 구조
 
-| 경로                             | 역할                                           |
-| -------------------------------- | ---------------------------------------------- |
-| `packages/next-webpack-baseline` | 공개 npm 패키지: Webpack 빌드 검사             |
-| `packages/legacy-browser-smoke`  | 공개 npm 패키지: 고정 Chromium 75 smoke 실행기 |
-| `apps/next-pages-fixture`        | 실제 Next.js Pages Router 통합 fixture         |
-| `scripts`                        | 패키지 파일 검증, packed import, 배포 안전장치 |
+| 경로                             | 역할                                               |
+| -------------------------------- | -------------------------------------------------- |
+| `packages/next-webpack-baseline` | 공개 npm 패키지: policy 검증과 미등록 package 관찰 |
+| `packages/legacy-browser-smoke`  | 공개 npm 패키지: 고정 Chromium 75 smoke 실행기     |
+| `apps/next-pages-fixture`        | 실제 Next.js Pages Router 통합 fixture             |
+| `scripts`                        | 패키지 파일 검증, packed import, 배포 안전장치     |
 
 ## 개발
 

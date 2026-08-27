@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BrowserBaseline } from "./baseline.js";
+import { classifyModule } from "./classification.js";
 import type { NormalizedConfig } from "./config.js";
 import {
   NEXT_WEBPACK_BASELINE_ERROR_CODES,
@@ -7,13 +8,22 @@ import {
 } from "./errors.js";
 import { analyzeSyntax } from "./syntax.js";
 import type { SyntaxDiagnostic } from "./syntax.js";
-import { createVerdict } from "./verdict.js";
+import {
+  createUnlistedCollector,
+  removeUnlistedReport,
+  renderUnlistedReport,
+  type ReportFileSystem,
+  writeUnlistedReport,
+} from "./unlisted-report.js";
+import { createRegisteredVerdict } from "./verdict.js";
+import { hasExactWaiver, validateWaivers } from "./waiver.js";
 
 const PLUGIN_NAME = "NextWebpackBaselinePlugin";
 
 export interface WebpackPluginInput {
   readonly config: NormalizedConfig;
   readonly baseline: BrowserBaseline;
+  readonly reportFileSystem?: ReportFileSystem;
 }
 
 export interface WebpackPluginOptions {
@@ -476,15 +486,29 @@ const createWaiverWarning = (
   return warning;
 };
 
+const createUnlistedDiagnostic = (
+  message: string,
+  mode: "warn" | "error",
+  kind: "Package" | "Summary",
+): Error => {
+  const suffix = mode === "warn" ? "Warning" : "Error";
+  const diagnostic = new Error(message);
+  diagnostic.name = `NextWebpackBaselineUnlisted${kind}${suffix}`;
+  diagnostic.stack = `${diagnostic.name}: ${diagnostic.message}`;
+  return diagnostic;
+};
+
 const inspectCompilation = (
   compilation: WebpackCompilation,
   input: WebpackPluginInput,
   cacheNamespace: "development" | "production",
 ): void => {
+  validateWaivers(input.config.waiversByPackage);
   const analyzed = new Set<string>();
   const unavailableSources = new Set<string>();
   const pending: PendingError[] = [];
   const waiverWarnings = new Map<string, PendingWarning>();
+  const unlistedCollector = createUnlistedCollector();
 
   for (const module of compilation.modules) {
     const chunks = readModuleChunks(compilation.chunkGraph, module);
@@ -504,27 +528,37 @@ const inspectCompilation = (
         continue;
       }
       const conditionResource = conditionResourceOf(unit);
-      const eligibility = createVerdict({
+      const classification = classifyModule({
         config: input.config,
         resource: conditionResource,
-        syntax: { diagnostics: [] },
         isClientEntryReachable,
       });
-      if (eligibility.status === "ignored") continue;
-      if (eligibility.resource === undefined) {
-        return unsupportedWebpack("module verdict resource가 없습니다.");
+      if (classification.kind === "ignored") continue;
+      if (
+        classification.kind === "unlisted" &&
+        (cacheNamespace === "development" ||
+          input.config.unlistedPackages === "ignore")
+      ) {
+        continue;
       }
 
       const loaded = loaderSourceOf(unit);
       if (loaded.kind === "unavailable") {
-        const unavailableKey = `${eligibility.resource.package}\u0000${eligibility.resource.entrypoint}`;
+        if (classification.kind === "unlisted") {
+          unlistedCollector.addUnanalyzable({
+            resource: classification.resource,
+            cause: "NWB_WEBPACK_UNSUPPORTED",
+          });
+          continue;
+        }
+        const unavailableKey = `${classification.resource.package}\u0000${classification.resource.entrypoint}`;
         if (!unavailableSources.has(unavailableKey)) {
           unavailableSources.add(unavailableKey);
           pending.push({
             sortKey: `${unavailableKey}\u0000${NEXT_WEBPACK_BASELINE_ERROR_CODES.WEBPACK_UNSUPPORTED}`,
             error: createSourceUnavailableError(
-              eligibility.resource.package,
-              eligibility.resource.entrypoint,
+              classification.resource.package,
+              classification.resource.entrypoint,
             ),
           });
         }
@@ -537,11 +571,47 @@ const inspectCompilation = (
       if (analyzed.has(analysisKey)) continue;
       analyzed.add(analysisKey);
 
-      const verdict = createVerdict({
+      const syntax = analyzeSyntax(source, input.baseline);
+      if (classification.kind === "unlisted") {
+        if (
+          syntax.diagnostics.some(
+            (diagnostic) => diagnostic.code === "NWB_SYNTAX_PARSE_INCOMPLETE",
+          )
+        ) {
+          unlistedCollector.addUnanalyzable({
+            resource: classification.resource,
+            cause: "NWB_SYNTAX_PARSE_INCOMPLETE",
+          });
+          continue;
+        }
+        if (syntax.occurrences.length === 0) continue;
+        if (
+          hasExactWaiver(input.config.waiversByPackage, classification.resource)
+        ) {
+          const warningKey = `${classification.resource.package}\u0000${classification.resource.entrypoint}`;
+          if (!waiverWarnings.has(warningKey)) {
+            waiverWarnings.set(warningKey, {
+              sortKey: warningKey,
+              warning: createWaiverWarning(
+                classification.resource.package,
+                classification.resource.entrypoint,
+              ),
+            });
+          }
+          continue;
+        }
+        unlistedCollector.addSyntax({
+          analysisKey,
+          resource: classification.resource,
+          occurrences: syntax.occurrences,
+        });
+        continue;
+      }
+
+      const verdict = createRegisteredVerdict({
         config: input.config,
-        resource: conditionResource,
-        syntax: analyzeSyntax(source, input.baseline),
-        isClientEntryReachable,
+        resource: classification.resource,
+        syntax,
       });
       if (verdict.status === "waived" && verdict.resource !== undefined) {
         const warningKey = `${verdict.resource.package}\u0000${verdict.resource.entrypoint}`;
@@ -585,6 +655,52 @@ const inspectCompilation = (
   const sortedWarnings = [...waiverWarnings.values()].sort((left, right) =>
     left.sortKey < right.sortKey ? -1 : left.sortKey > right.sortKey ? 1 : 0,
   );
+
+  const unlistedDiagnostics: Error[] = [];
+  if (cacheNamespace === "production") {
+    if (input.config.unlistedPackages === "ignore") {
+      try {
+        removeUnlistedReport(input.config.projectDir, input.reportFileSystem);
+      } catch (cause) {
+        if (!(cause instanceof Error)) throw cause;
+        unlistedDiagnostics.push(cause);
+      }
+    } else {
+      const mode = input.config.unlistedPackages;
+      const report = unlistedCollector.createReport(mode);
+      let reportWritten = true;
+      try {
+        writeUnlistedReport(
+          input.config.projectDir,
+          report,
+          input.reportFileSystem,
+        );
+      } catch (cause) {
+        if (!(cause instanceof Error)) throw cause;
+        reportWritten = false;
+        unlistedDiagnostics.push(cause);
+      }
+      if (reportWritten || mode === "warn") {
+        const rendered = renderUnlistedReport(report);
+        for (const packageMessage of rendered.packageMessages) {
+          unlistedDiagnostics.push(
+            createUnlistedDiagnostic(
+              packageMessage.policySnippet === undefined
+                ? packageMessage.message
+                : `${packageMessage.message}\npolicy 제안: ${packageMessage.policySnippet}`,
+              mode,
+              "Package",
+            ),
+          );
+        }
+        if (rendered.summary !== undefined) {
+          unlistedDiagnostics.push(
+            createUnlistedDiagnostic(rendered.summary, mode, "Summary"),
+          );
+        }
+      }
+    }
+  }
   withinWebpackBoundary("compilation 결과를 갱신할 수 없습니다.", () => {
     Array.prototype.push.call(
       compilation.errors,
@@ -594,6 +710,12 @@ const inspectCompilation = (
       compilation.warnings,
       ...sortedWarnings.map(({ warning }) => warning),
     );
+    const reportTarget =
+      input.config.unlistedPackages === "error" &&
+      cacheNamespace === "production"
+        ? compilation.errors
+        : compilation.warnings;
+    Array.prototype.push.call(reportTarget, ...unlistedDiagnostics);
   });
 };
 

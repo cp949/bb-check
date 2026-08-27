@@ -9,7 +9,10 @@ export interface NextWebpackBaselineConfig {
   readonly projectDir: string;
   readonly policy: readonly PackagePolicy[];
   readonly waivers?: readonly PackageWaiver[];
+  readonly unlistedPackages?: UnlistedPackagesMode;
 }
+
+export type UnlistedPackagesMode = "ignore" | "warn" | "error";
 
 export interface PackagePolicy {
   readonly package: string;

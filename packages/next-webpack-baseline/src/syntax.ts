@@ -1,7 +1,7 @@
 import { parse } from "@babel/parser";
 import type { BrowserBaseline, SyntaxFeature } from "./baseline.js";
 
-const SYNTAX_FEATURES: readonly SyntaxFeature[] = [
+export const SYNTAX_FEATURES: readonly SyntaxFeature[] = [
   "optional-chaining",
   "nullish-coalescing",
   "class-properties",
@@ -12,6 +12,17 @@ const SYNTAX_FEATURES: readonly SyntaxFeature[] = [
   "object-rest-spread",
 ];
 
+export const SYNTAX_FEATURE_METADATA = {
+  "optional-chaining": { reasonLabel: "?." },
+  "nullish-coalescing": { reasonLabel: "??" },
+  "class-properties": { reasonLabel: "클래스 필드" },
+  "private-methods": { reasonLabel: "#메서드" },
+  "logical-assignment-operators": { reasonLabel: "논리 할당 연산자" },
+  "numeric-separator": { reasonLabel: "숫자 구분자" },
+  "async-generator-functions": { reasonLabel: "async generator" },
+  "object-rest-spread": { reasonLabel: "object rest/spread" },
+} satisfies Readonly<Record<SyntaxFeature, { readonly reasonLabel: string }>>;
+
 export interface SyntaxDiagnostic {
   readonly code: "NWB_SYNTAX_UNSUPPORTED" | "NWB_SYNTAX_PARSE_INCOMPLETE";
   readonly feature?: SyntaxFeature;
@@ -20,6 +31,12 @@ export interface SyntaxDiagnostic {
 
 export interface SyntaxAnalysis {
   readonly diagnostics: readonly SyntaxDiagnostic[];
+  readonly occurrences: readonly SyntaxOccurrence[];
+}
+
+export interface SyntaxOccurrence {
+  readonly feature: SyntaxFeature;
+  readonly count: number;
 }
 
 interface AstNode {
@@ -50,25 +67,28 @@ const isAsyncGenerator = (node: AstNode): boolean =>
 const collectFromNode = (
   node: AstNode,
   parent: AstNode | undefined,
-  detected: Set<SyntaxFeature>,
+  counts: Map<SyntaxFeature, number>,
 ): void => {
+  const increment = (feature: SyntaxFeature): void => {
+    counts.set(feature, (counts.get(feature) ?? 0) + 1);
+  };
   switch (node.type) {
     case "OptionalMemberExpression":
     case "OptionalCallExpression":
-      detected.add("optional-chaining");
+      increment("optional-chaining");
       break;
     case "LogicalExpression":
-      if (node.operator === "??") detected.add("nullish-coalescing");
+      if (node.operator === "??") increment("nullish-coalescing");
       break;
     case "ClassProperty":
-      detected.add("class-properties");
+      increment("class-properties");
       break;
     // private field는 public/static field와 같은 class-properties contract를 사용한다.
     case "ClassPrivateProperty":
-      detected.add("class-properties");
+      increment("class-properties");
       break;
     case "ClassPrivateMethod":
-      detected.add("private-methods");
+      increment("private-methods");
       break;
     case "AssignmentExpression":
       if (
@@ -76,48 +96,55 @@ const collectFromNode = (
         node.operator === "||=" ||
         node.operator === "??="
       ) {
-        detected.add("logical-assignment-operators");
+        increment("logical-assignment-operators");
       }
       break;
     case "NumericLiteral":
     case "BigIntLiteral":
-      if (hasNumericSeparator(node)) detected.add("numeric-separator");
+      if (hasNumericSeparator(node)) increment("numeric-separator");
       break;
     case "RestElement":
       if (parent?.type === "ObjectPattern") {
-        detected.add("object-rest-spread");
+        increment("object-rest-spread");
       }
       break;
     case "SpreadElement":
       if (parent?.type === "ObjectExpression") {
-        detected.add("object-rest-spread");
+        increment("object-rest-spread");
       }
       break;
     default:
       break;
   }
 
-  if (isAsyncGenerator(node)) detected.add("async-generator-functions");
+  if (isAsyncGenerator(node)) increment("async-generator-functions");
 
   for (const value of Object.values(node)) {
     if (isAstNode(value)) {
-      collectFromNode(value, node, detected);
+      collectFromNode(value, node, counts);
     } else if (Array.isArray(value)) {
       for (const item of value) {
-        if (isAstNode(item)) collectFromNode(item, node, detected);
+        if (isAstNode(item)) collectFromNode(item, node, counts);
       }
     }
   }
 };
 
 /** Babel AST에서 contract feature만 수집하며 결과 순서는 traversal에 의존하지 않는다. */
-export const collectSyntaxFeatures = (
+export const collectSyntaxFeatures = (ast: unknown): readonly SyntaxFeature[] =>
+  collectSyntaxOccurrences(ast).map(({ feature }) => feature);
+
+/** Babel AST를 한 번 순회해 contract feature의 실제 출현 횟수를 센다. */
+export const collectSyntaxOccurrences = (
   ast: unknown,
-): readonly SyntaxFeature[] => {
+): readonly SyntaxOccurrence[] => {
   if (!isAstNode(ast)) return [];
-  const detected = new Set<SyntaxFeature>();
-  collectFromNode(ast, undefined, detected);
-  return SYNTAX_FEATURES.filter((feature) => detected.has(feature));
+  const counts = new Map<SyntaxFeature, number>();
+  collectFromNode(ast, undefined, counts);
+  return SYNTAX_FEATURES.flatMap((feature) => {
+    const count = counts.get(feature);
+    return count === undefined ? [] : [{ feature, count }];
+  });
 };
 
 /** Baseline 지원 여부 조회는 AST 순회와 분리하여 parser fixture 없이 사용할 수 있다. */
@@ -143,6 +170,7 @@ const parserIncomplete = (cause: unknown): SyntaxAnalysis => {
     ? "지원하지 않는 parser mode가 남아 있습니다."
     : "JavaScript 문법이 올바르지 않습니다.";
   return {
+    occurrences: [],
     diagnostics: [
       {
         code: "NWB_SYNTAX_PARSE_INCOMPLETE",
@@ -163,11 +191,12 @@ export const analyzeSyntax = (
     return parserIncomplete(cause);
   }
 
+  const occurrences = collectSyntaxOccurrences(ast).filter(({ feature }) =>
+    baseline.unsupportedSyntax.has(feature),
+  );
   return {
-    diagnostics: findUnsupportedSyntax(
-      collectSyntaxFeatures(ast),
-      baseline,
-    ).map((feature) => ({
+    occurrences,
+    diagnostics: occurrences.map(({ feature }) => ({
       code: "NWB_SYNTAX_UNSUPPORTED",
       feature,
       message: `${feature} 구문은 설정된 browser baseline에서 지원되지 않습니다.`,

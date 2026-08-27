@@ -14,15 +14,26 @@ const supportedCases = new Set([
   "waiver-exact",
   "waiver-prefix",
   "server-only",
+  "unlisted-warn",
+  "unlisted-error",
+  "unlisted-ignore",
+  "unlisted-dev-option",
+  "unlisted-waiver",
 ]);
 
 if (!supportedCases.has(fixtureCase)) {
   throw new Error(`Unknown NWB fixture case: ${fixtureCase}`);
 }
 
-const hasPolicy = fixtureCase !== "control";
+const hasPolicy = new Set([
+  "red",
+  "green",
+  "waiver-exact",
+  "waiver-prefix",
+  "server-only",
+]).has(fixtureCase);
 const allowedEntrypoints =
-  fixtureCase === "waiver-exact"
+  fixtureCase === "waiver-exact" || fixtureCase === "unlisted-waiver"
     ? ["index.js"]
     : fixtureCase === "waiver-prefix"
       ? ["index"]
@@ -50,6 +61,11 @@ const baseline = createNextWebpackBaseline(
             },
           ],
         }),
+    ...(fixtureCase === "unlisted-error"
+      ? { unlistedPackages: "error" }
+      : fixtureCase === "unlisted-ignore"
+        ? { unlistedPackages: "ignore" }
+        : {}),
   }),
 );
 
@@ -59,7 +75,11 @@ export default {
   transpilePackages:
     fixtureCase === "green" ? [...baseline.transpilePackages] : [],
   webpack(config, context) {
-    config.plugins.push(baseline.webpackPlugin({ dev: context.dev }));
+    config.plugins.push(
+      baseline.webpackPlugin({
+        dev: fixtureCase === "unlisted-dev-option" ? true : context.dev,
+      }),
+    );
     return config;
   },
 };

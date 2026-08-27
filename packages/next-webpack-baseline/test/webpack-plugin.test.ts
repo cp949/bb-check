@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BrowserBaseline, SyntaxFeature } from "../src/baseline.js";
 import type { NormalizedConfig } from "../src/config.js";
+import type { ReportFileSystem } from "../src/unlisted-report.js";
 import { createWebpackPlugin } from "../src/webpack-plugin.js";
 import {
   createWebpackFixture,
@@ -11,6 +12,7 @@ const packageRoot = "/consumer/node_modules/legacy-widget";
 
 const config: NormalizedConfig = {
   projectDir: "/consumer",
+  unlistedPackages: "ignore",
   policyByPackage: new Map([
     ["legacy-widget", { package: "legacy-widget", reason: "legacy syntax" }],
   ]),
@@ -35,6 +37,39 @@ const pageModule = (
   loaderSource,
   entrypoints: ["pages/index"],
 });
+
+const unlistedPageModule = (
+  entrypoint: string,
+  loaderSource: WebpackModuleDefinition["loaderSource"],
+): WebpackModuleDefinition => ({
+  resource: `/consumer/node_modules/unlisted-widget/${entrypoint}`,
+  loaderSource,
+  entrypoints: ["pages/index"],
+});
+
+const createReportFileSystem = (options?: {
+  readonly onWrite?: (data: string) => void;
+  readonly writeError?: Error;
+  readonly removeError?: NodeJS.ErrnoException;
+}) => {
+  const writes: string[] = [];
+  const removed: string[] = [];
+  const fileSystem: ReportFileSystem = {
+    temporaryPath: (target) => `${target}.tmp-test`,
+    mkdirSync() {},
+    writeFileSync(_path, data) {
+      options?.onWrite?.(data);
+      if (options?.writeError !== undefined) throw options.writeError;
+      writes.push(data);
+    },
+    renameSync() {},
+    unlinkSync(path) {
+      removed.push(path);
+      if (options?.removeError !== undefined) throw options.removeError;
+    },
+  };
+  return { fileSystem, removed, writes };
+};
 
 const runPlugin = ({
   definitions,
@@ -76,6 +111,522 @@ const expectStableWebpackShapeError = (operation: () => unknown): void => {
 };
 
 describe("createWebpackPlugin", () => {
+  it("production warn은 미등록 package를 집계해 warning과 JSON을 남긴다", () => {
+    const report = createReportFileSystem();
+    const fixture = createWebpackFixture({
+      modules: [
+        unlistedPageModule(
+          "dist/index.js",
+          "class Widget { value = input?.first?.second; }",
+        ),
+      ],
+    });
+    createWebpackPlugin(
+      {
+        config: {
+          ...config,
+          unlistedPackages: "warn",
+          policyByPackage: new Map(),
+        },
+        baseline: baselineFor(
+          new Set(["optional-chaining", "class-properties"]),
+        ),
+        reportFileSystem: report.fileSystem,
+      },
+      { dev: false },
+    ).apply(fixture.compiler);
+
+    expect(fixture.run()).toEqual([]);
+    expect(fixture.modules[0]?.sourceReads).toBe(1);
+    expect(
+      fixture.compilation.warnings.map(({ name, message }) => ({
+        name,
+        message,
+      })),
+    ).toEqual([
+      {
+        name: "NextWebpackBaselineUnlistedPackageWarning",
+        message:
+          "unlisted-widget: ?. 2건 · 클래스 필드 1건 — policy 등록 또는 waiver 검토\npolicy 제안: { package: 'unlisted-widget', reason: '?. 2건 · 클래스 필드 1건' },",
+      },
+      {
+        name: "NextWebpackBaselineUnlistedSummaryWarning",
+        message:
+          "미등록 1패키지 · 미지원 문법 3건 · 분석 불가 0건 — 상세: .next/diagnostics/baseline-unlisted.json",
+      },
+    ]);
+    expect(report.writes).toHaveLength(1);
+    expect(JSON.parse(report.writes[0] ?? "")).toEqual({
+      schemaVersion: 1,
+      mode: "warn",
+      packages: [
+        {
+          package: "unlisted-widget",
+          diagnostics: [
+            { feature: "optional-chaining", count: 2 },
+            { feature: "class-properties", count: 1 },
+          ],
+          suggestedReason: "?. 2건 · 클래스 필드 1건",
+        },
+      ],
+      unanalyzable: [],
+    });
+  });
+
+  it("미등록 동일 resource/content hash는 한 번만 세고 다른 source count는 합산한다", () => {
+    const report = createReportFileSystem();
+    const duplicate = unlistedPageModule(
+      "dist/index.js",
+      "const value = input?.value;",
+    );
+    const fixture = createWebpackFixture({
+      modules: [
+        duplicate,
+        { ...duplicate },
+        unlistedPageModule("dist/index.js", "const value = input ?? fallback;"),
+      ],
+    });
+    createWebpackPlugin(
+      {
+        config: {
+          ...config,
+          unlistedPackages: "warn",
+          policyByPackage: new Map(),
+        },
+        baseline: baselineFor(
+          new Set(["optional-chaining", "nullish-coalescing"]),
+        ),
+        reportFileSystem: report.fileSystem,
+      },
+      { dev: false },
+    ).apply(fixture.compiler);
+
+    fixture.run();
+    expect(JSON.parse(report.writes[0] ?? "").packages).toEqual([
+      {
+        package: "unlisted-widget",
+        diagnostics: [
+          { feature: "optional-chaining", count: 1 },
+          { feature: "nullish-coalescing", count: 1 },
+        ],
+        suggestedReason: "?. 1건 · ?? 1건",
+      },
+    ]);
+  });
+
+  it("production error는 JSON을 먼저 쓴 뒤 같은 report를 compilation error로 주입한다", () => {
+    const fixture = createWebpackFixture({
+      modules: [
+        unlistedPageModule("dist/index.js", "const value = input?.value;"),
+      ],
+    });
+    const report = createReportFileSystem({
+      onWrite() {
+        expect(fixture.compilation.errors).toEqual([]);
+      },
+    });
+    createWebpackPlugin(
+      {
+        config: {
+          ...config,
+          unlistedPackages: "error",
+          policyByPackage: new Map(),
+        },
+        baseline: baselineFor(new Set(["optional-chaining"])),
+        reportFileSystem: report.fileSystem,
+      },
+      { dev: false },
+    ).apply(fixture.compiler);
+
+    expect(fixture.run()).toHaveLength(2);
+    expect(fixture.compilation.errors.map(({ name }) => name)).toEqual([
+      "NextWebpackBaselineUnlistedPackageError",
+      "NextWebpackBaselineUnlistedSummaryError",
+    ]);
+    expect(JSON.parse(report.writes[0] ?? "")).toEqual(
+      expect.objectContaining({ mode: "error" }),
+    );
+  });
+
+  it.each([
+    { name: "production ignore", dev: false, mode: "ignore", removes: 1 },
+    { name: "development warn", dev: true, mode: "warn", removes: 0 },
+  ] as const)(
+    "$name은 미등록 source를 읽지 않는다",
+    ({ dev, mode, removes }) => {
+      const report = createReportFileSystem();
+      const fixture = createWebpackFixture({
+        modules: [
+          unlistedPageModule("dist/index.js", "const value = input?.value;"),
+        ],
+      });
+      createWebpackPlugin(
+        {
+          config: {
+            ...config,
+            unlistedPackages: mode,
+            policyByPackage: new Map(),
+          },
+          baseline: baselineFor(),
+          reportFileSystem: report.fileSystem,
+        },
+        { dev },
+      ).apply(fixture.compiler);
+
+      expect(fixture.run()).toEqual([]);
+      expect(fixture.modules[0]?.sourceReads).toBe(0);
+      expect(report.writes).toEqual([]);
+      expect(report.removed).toHaveLength(removes);
+    },
+  );
+
+  it("미등록 exact waiver는 기존 waiver warning만 남기고 report 제안에서 제외한다", () => {
+    const report = createReportFileSystem();
+    const fixture = createWebpackFixture({
+      modules: [
+        unlistedPageModule("dist/index.js", "const value = input?.value;"),
+      ],
+    });
+    createWebpackPlugin(
+      {
+        config: {
+          ...config,
+          unlistedPackages: "warn",
+          policyByPackage: new Map(),
+          waiversByPackage: new Map([
+            [
+              "unlisted-widget",
+              [
+                {
+                  package: "unlisted-widget",
+                  reason: "reviewed exact entrypoint",
+                  allowedEntrypoints: ["dist/index.js"],
+                },
+              ],
+            ],
+          ]),
+        },
+        baseline: baselineFor(new Set(["optional-chaining"])),
+        reportFileSystem: report.fileSystem,
+      },
+      { dev: false },
+    ).apply(fixture.compiler);
+
+    expect(fixture.run()).toEqual([]);
+    expect(
+      fixture.compilation.warnings.map(({ name, message }) => ({
+        name,
+        message,
+      })),
+    ).toEqual([
+      {
+        name: "NextWebpackBaselineWaiverWarning",
+        message: "waiver applied: unlisted-widget/dist/index.js",
+      },
+    ]);
+    expect(JSON.parse(report.writes[0] ?? "")).toEqual({
+      schemaVersion: 1,
+      mode: "warn",
+      packages: [],
+      unanalyzable: [],
+    });
+  });
+
+  it("같은 미등록 package의 waived entrypoint만 집계에서 제외한다", () => {
+    const report = createReportFileSystem();
+    const fixture = createWebpackFixture({
+      modules: [
+        unlistedPageModule("dist/a-waived.js", "const value = input?.value;"),
+        unlistedPageModule("dist/b-reported.js", "const value = input?.value;"),
+      ],
+    });
+    createWebpackPlugin(
+      {
+        config: {
+          ...config,
+          unlistedPackages: "warn",
+          policyByPackage: new Map(),
+          waiversByPackage: new Map([
+            [
+              "unlisted-widget",
+              [
+                {
+                  package: "unlisted-widget",
+                  reason: "one reviewed entrypoint",
+                  allowedEntrypoints: ["dist/a-waived.js"],
+                },
+              ],
+            ],
+          ]),
+        },
+        baseline: baselineFor(new Set(["optional-chaining"])),
+        reportFileSystem: report.fileSystem,
+      },
+      { dev: false },
+    ).apply(fixture.compiler);
+
+    fixture.run();
+    expect(JSON.parse(report.writes[0] ?? "").packages).toEqual([
+      {
+        package: "unlisted-widget",
+        diagnostics: [{ feature: "optional-chaining", count: 1 }],
+        suggestedReason: "?. 1건",
+      },
+    ]);
+    expect(fixture.compilation.warnings[0]?.message).toBe(
+      "waiver applied: unlisted-widget/dist/a-waived.js",
+    );
+  });
+
+  it("미등록 parse-incomplete에는 exact waiver를 적용하지 않는다", () => {
+    const report = createReportFileSystem();
+    const fixture = createWebpackFixture({
+      modules: [unlistedPageModule("dist/index.js", "const = ;")],
+    });
+    createWebpackPlugin(
+      {
+        config: {
+          ...config,
+          unlistedPackages: "warn",
+          policyByPackage: new Map(),
+          waiversByPackage: new Map([
+            [
+              "unlisted-widget",
+              [
+                {
+                  package: "unlisted-widget",
+                  reason: "must not waive incomplete parse",
+                  allowedEntrypoints: ["dist/index.js"],
+                },
+              ],
+            ],
+          ]),
+        },
+        baseline: baselineFor(),
+        reportFileSystem: report.fileSystem,
+      },
+      { dev: false },
+    ).apply(fixture.compiler);
+
+    fixture.run();
+    expect(fixture.compilation.warnings.map(({ name }) => name)).toEqual([
+      "NextWebpackBaselineUnlistedPackageWarning",
+      "NextWebpackBaselineUnlistedSummaryWarning",
+    ]);
+    expect(JSON.parse(report.writes[0] ?? "").unanalyzable).toEqual([
+      {
+        package: "unlisted-widget",
+        entrypoint: "dist/index.js",
+        cause: "NWB_SYNTAX_PARSE_INCOMPLETE",
+      },
+    ]);
+  });
+
+  it.each(["warn", "error"] as const)(
+    "미등록 분석 불가는 %s mode severity와 JSON cause를 따른다",
+    (mode) => {
+      const report = createReportFileSystem();
+      const fixture = createWebpackFixture({
+        modules: [
+          {
+            ...unlistedPageModule("dist/index.js", "const value = 1;"),
+            sourceFailure: "missing-original-source",
+          },
+        ],
+      });
+      createWebpackPlugin(
+        {
+          config: {
+            ...config,
+            unlistedPackages: mode,
+            policyByPackage: new Map(),
+          },
+          baseline: baselineFor(),
+          reportFileSystem: report.fileSystem,
+        },
+        { dev: false },
+      ).apply(fixture.compiler);
+
+      fixture.run();
+      expect(
+        (mode === "warn"
+          ? fixture.compilation.warnings
+          : fixture.compilation.errors
+        ).map(({ name }) => name),
+      ).toEqual([
+        `NextWebpackBaselineUnlistedPackage${mode === "warn" ? "Warning" : "Error"}`,
+        `NextWebpackBaselineUnlistedSummary${mode === "warn" ? "Warning" : "Error"}`,
+      ]);
+      expect(JSON.parse(report.writes[0] ?? "").unanalyzable).toEqual([
+        {
+          package: "unlisted-widget",
+          entrypoint: "dist/index.js",
+          cause: "NWB_WEBPACK_UNSUPPORTED",
+        },
+      ]);
+    },
+  );
+
+  it.each(["warn", "error"] as const)(
+    "report 작성 실패는 %s mode severity의 NWB_REPORT_IO_FAILED로 드러낸다",
+    (mode) => {
+      const report = createReportFileSystem({
+        writeError: new Error("write sentinel"),
+      });
+      const fixture = createWebpackFixture({
+        modules: [
+          unlistedPageModule("dist/index.js", "const value = input?.value;"),
+        ],
+      });
+      createWebpackPlugin(
+        {
+          config: {
+            ...config,
+            unlistedPackages: mode,
+            policyByPackage: new Map(),
+          },
+          baseline: baselineFor(new Set(["optional-chaining"])),
+          reportFileSystem: report.fileSystem,
+        },
+        { dev: false },
+      ).apply(fixture.compiler);
+
+      fixture.run();
+      const diagnostics =
+        mode === "warn"
+          ? fixture.compilation.warnings
+          : fixture.compilation.errors;
+      expect(diagnostics[0]).toEqual(
+        expect.objectContaining({ code: "NWB_REPORT_IO_FAILED" }),
+      );
+      expect(diagnostics.map(({ name }) => name).slice(1)).toEqual(
+        mode === "warn"
+          ? [
+              "NextWebpackBaselineUnlistedPackageWarning",
+              "NextWebpackBaselineUnlistedSummaryWarning",
+            ]
+          : [],
+      );
+    },
+  );
+
+  it("production ignore의 stale report 삭제 실패는 warning이고 build를 차단하지 않는다", () => {
+    const removeError = new Error("remove sentinel") as NodeJS.ErrnoException;
+    removeError.code = "EACCES";
+    const report = createReportFileSystem({ removeError });
+    const fixture = createWebpackFixture({
+      modules: [
+        unlistedPageModule("dist/index.js", "const value = input?.value;"),
+      ],
+    });
+    createWebpackPlugin(
+      {
+        config: {
+          ...config,
+          unlistedPackages: "ignore",
+          policyByPackage: new Map(),
+        },
+        baseline: baselineFor(),
+        reportFileSystem: report.fileSystem,
+      },
+      { dev: false },
+    ).apply(fixture.compiler);
+
+    expect(fixture.run()).toEqual([]);
+    expect(fixture.compilation.warnings).toEqual([
+      expect.objectContaining({ code: "NWB_REPORT_IO_FAILED" }),
+    ]);
+    expect(fixture.modules[0]?.sourceReads).toBe(0);
+  });
+
+  it("등록 package의 오류와 waiver warning을 입력 순서와 무관하게 그대로 유지한다", () => {
+    const characterizedConfig: NormalizedConfig = {
+      ...config,
+      waiversByPackage: new Map([
+        [
+          "legacy-widget",
+          [
+            {
+              package: "legacy-widget",
+              reason: "characterization waiver",
+              allowedEntrypoints: ["dist/d-waived.js"],
+            },
+          ],
+        ],
+      ]),
+    };
+    const definitions = [
+      pageModule("dist/e-nullish.js", "const value = input ?? fallback;"),
+      pageModule("dist/c-invalid.js", "const = ;"),
+      pageModule("dist/d-waived.js", "const value = input?.value;"),
+      pageModule("dist/b-optional.js", "const value = input?.value;"),
+      {
+        ...pageModule("dist/a-unavailable.js", "const value = 1;"),
+        sourceFailure: "missing-original-source" as const,
+      },
+    ];
+    const run = (modules: readonly WebpackModuleDefinition[]) => {
+      const fixture = createWebpackFixture({ modules });
+      createWebpackPlugin(
+        { config: characterizedConfig, baseline: baselineFor() },
+        { dev: false },
+      ).apply(fixture.compiler);
+      fixture.run();
+      return {
+        errors: fixture.compilation.errors.map((error) => ({
+          name: error.name,
+          code: "code" in error ? error.code : undefined,
+          message: error.message,
+        })),
+        warnings: fixture.compilation.warnings.map((warning) => ({
+          name: warning.name,
+          message: warning.message,
+          stack: warning.stack,
+        })),
+      };
+    };
+
+    const expected = {
+      errors: [
+        {
+          name: "NextWebpackBaselineError",
+          code: "NWB_WEBPACK_UNSUPPORTED",
+          message:
+            "[NWB_WEBPACK_UNSUPPORTED] legacy-widget/dist/a-unavailable.js: loader 처리 후 JavaScript source를 읽을 수 없습니다.",
+        },
+        {
+          name: "NextWebpackBaselineError",
+          code: "NWB_SYNTAX_UNSUPPORTED",
+          message:
+            "[NWB_SYNTAX_UNSUPPORTED] legacy-widget/dist/b-optional.js: optional-chaining 구문은 설정된 browser baseline에서 지원되지 않습니다.",
+        },
+        {
+          name: "NextWebpackBaselineError",
+          code: "NWB_SYNTAX_PARSE_INCOMPLETE",
+          message:
+            "[NWB_SYNTAX_PARSE_INCOMPLETE] legacy-widget/dist/c-invalid.js: JavaScript source를 완전히 parse할 수 없습니다: JavaScript 문법이 올바르지 않습니다.",
+        },
+        {
+          name: "NextWebpackBaselineError",
+          code: "NWB_SYNTAX_UNSUPPORTED",
+          message:
+            "[NWB_SYNTAX_UNSUPPORTED] legacy-widget/dist/e-nullish.js: nullish-coalescing 구문은 설정된 browser baseline에서 지원되지 않습니다.",
+        },
+      ],
+      warnings: [
+        {
+          name: "NextWebpackBaselineWaiverWarning",
+          message: "waiver applied: legacy-widget/dist/d-waived.js",
+          stack:
+            "NextWebpackBaselineWaiverWarning: waiver applied: legacy-widget/dist/d-waived.js",
+        },
+      ],
+    };
+
+    expect(run(definitions)).toEqual(expected);
+    expect(run([...definitions].reverse())).toEqual(expected);
+  });
+
   it("사용된 exact waiver를 package-relative warning으로 중복 제거해 정렬한다", () => {
     const waivedConfig: NormalizedConfig = {
       ...config,

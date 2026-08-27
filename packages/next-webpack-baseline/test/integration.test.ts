@@ -2,9 +2,11 @@ import {
   cpSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -20,6 +22,10 @@ const installedFixturePackageDir = resolve(
   "node_modules/syntax-fixture",
 );
 const childTimeoutMs = 90_000;
+const unlistedReportPath = resolve(
+  fixtureDir,
+  ".next/diagnostics/baseline-unlisted.json",
+);
 
 interface BuildResult {
   readonly status: number | null;
@@ -58,8 +64,12 @@ const runNpm = (
   };
 };
 
-const buildFixture = (fixtureCase: string): BuildResult => {
+const buildFixture = (
+  fixtureCase: string,
+  prepare?: () => void,
+): BuildResult => {
   rmSync(resolve(fixtureDir, ".next"), { recursive: true, force: true });
+  prepare?.();
   return runNpm(["run", "build", "--workspace=next-pages-fixture"], {
     env: { ...process.env, NWB_FIXTURE_CASE: fixtureCase },
     timeout: childTimeoutMs,
@@ -142,6 +152,88 @@ describe.sequential("Next.js Pages Router Webpack integration", () => {
     expectCompleted(result);
     expect(result.status, result.output).toBe(0);
   }, 110_000);
+
+  it("기본 warn은 미등록 package를 집계하고 policy 제안과 JSON을 남긴다", () => {
+    const result = buildFixture("unlisted-warn");
+
+    expectCompleted(result);
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain(
+      "syntax-fixture: ?. 1건 · ?? 1건 — policy 등록 또는 waiver 검토",
+    );
+    expect(result.output).toContain(
+      "policy 제안: { package: 'syntax-fixture', reason: '?. 1건 · ?? 1건' },",
+    );
+    expect(JSON.parse(readFileSync(unlistedReportPath, "utf8"))).toEqual({
+      schemaVersion: 1,
+      mode: "warn",
+      packages: [
+        {
+          package: "syntax-fixture",
+          diagnostics: [
+            { feature: "optional-chaining", count: 1 },
+            { feature: "nullish-coalescing", count: 1 },
+          ],
+          suggestedReason: "?. 1건 · ?? 1건",
+        },
+      ],
+      unanalyzable: [],
+    });
+  }, 110_000);
+
+  it("error는 같은 JSON을 남긴 뒤 미등록 package로 build를 차단한다", () => {
+    const result = buildFixture("unlisted-error");
+
+    expectCompleted(result);
+    expect(result.status).toBe(1);
+    expect(result.output).toContain(
+      "syntax-fixture: ?. 1건 · ?? 1건 — policy 등록 또는 waiver 검토",
+    );
+    expect(JSON.parse(readFileSync(unlistedReportPath, "utf8"))).toEqual(
+      expect.objectContaining({ mode: "error" }),
+    );
+  }, 110_000);
+
+  it("ignore는 미등록 분석 없이 stale report를 삭제하고 build를 통과한다", () => {
+    const result = buildFixture("unlisted-ignore", () => {
+      mkdirSync(dirname(unlistedReportPath), { recursive: true });
+      writeFileSync(unlistedReportPath, "stale report", "utf8");
+    });
+
+    expectCompleted(result);
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).not.toContain("NextWebpackBaselineUnlisted");
+    expect(existsSync(unlistedReportPath)).toBe(false);
+  }, 110_000);
+
+  it("dev option은 production compilation에서도 미등록 분석과 report I/O를 생략한다", () => {
+    const result = buildFixture("unlisted-dev-option");
+
+    expectCompleted(result);
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).not.toContain("NextWebpackBaselineUnlisted");
+    expect(existsSync(unlistedReportPath)).toBe(false);
+  }, 110_000);
+
+  it("미등록 exact waiver는 기존 warning만 남고 신규 report 제안에서 제외된다", () => {
+    const result = buildFixture("unlisted-waiver");
+
+    expectCompleted(result);
+    expect(result.status, result.output).toBe(0);
+    expect(
+      result.output.match(/waiver applied: syntax-fixture\/index\.js/gu),
+    ).toHaveLength(1);
+    expect(result.output).not.toContain("policy 제안:");
+    expect(JSON.parse(readFileSync(unlistedReportPath, "utf8"))).toEqual({
+      schemaVersion: 1,
+      mode: "warn",
+      packages: [],
+      unanalyzable: [],
+    });
+  }, 110_000);
+
+  // 실제 Next fixture source는 parser/loader가 먼저 처리한다. source-unavailable과
+  // parse-incomplete의 reporter acceptance는 public Webpack fixture test가 담당한다.
 
   it("정책 package를 transpile하지 않으면 실제 client build를 차단한다", () => {
     const result = buildFixture("red");

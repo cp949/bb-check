@@ -10,6 +10,43 @@ const baselineFor = (
 });
 
 describe("analyzeSyntax", () => {
+  it("8종 feature의 실제 출현 횟수를 canonical 순서로 센다", () => {
+    const analysis = analyzeSyntax(
+      [
+        "const first = account?.profile?.name;",
+        "const second = load?.();",
+        'const locale = requested ?? fallback ?? "ko-KR";',
+        "class Fields { first = 1; second = 2; }",
+        "class PrivateMethods { #first() {} #second() {} }",
+        "options.enabled ??= true; options.ready ||= false; options.open &&= check();",
+        "const amount = 1_000; const bigint = 2_000n;",
+        "async function* firstPages() { yield 1; } async function* secondPages() { yield 2; }",
+        "const { id, ...rest } = record; const copy = { ...record };",
+      ].join("\n"),
+      baselineFor([
+        "optional-chaining",
+        "nullish-coalescing",
+        "class-properties",
+        "private-methods",
+        "logical-assignment-operators",
+        "numeric-separator",
+        "async-generator-functions",
+        "object-rest-spread",
+      ]),
+    );
+
+    expect(analysis.occurrences).toEqual([
+      { feature: "optional-chaining", count: 3 },
+      { feature: "nullish-coalescing", count: 2 },
+      { feature: "class-properties", count: 2 },
+      { feature: "private-methods", count: 2 },
+      { feature: "logical-assignment-operators", count: 3 },
+      { feature: "numeric-separator", count: 2 },
+      { feature: "async-generator-functions", count: 2 },
+      { feature: "object-rest-spread", count: 2 },
+    ]);
+  });
+
   it.each([
     {
       feature: "optional-chaining",

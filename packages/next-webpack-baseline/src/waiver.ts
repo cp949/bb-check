@@ -4,6 +4,7 @@ import {
   NextWebpackBaselineError,
 } from "./errors.js";
 import type { PackageWaiver } from "./index.js";
+import type { PackageResource } from "./package-name.js";
 
 const invalidEntrypoint = (): never => {
   throw new NextWebpackBaselineError(
@@ -39,3 +40,12 @@ export const validateWaivers = (
     }
   }
 };
+
+/** validateWaivers 이후 package-relative exact entrypoint만 매칭한다. */
+export const hasExactWaiver = (
+  waiversByPackage: ReadonlyMap<string, readonly PackageWaiver[]>,
+  resource: PackageResource,
+): boolean =>
+  (waiversByPackage.get(resource.package) ?? []).some((waiver) =>
+    waiver.allowedEntrypoints.includes(resource.entrypoint),
+  );
